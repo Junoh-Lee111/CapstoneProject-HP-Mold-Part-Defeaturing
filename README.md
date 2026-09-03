@@ -37,7 +37,10 @@ AI 기반 금형/부품 CAD 형상 단순화(defeaturing) 자동화 기술 개�
 | 참여기업 | HP Printing Korea |
 | 멘토 | Byoungho Yoo (CAE) |
 | 담당교수 | Edward Youngil Kim (ed.kim@wsu.ac.kr) |
-| 팀원 | Vangala Hemanth Reddy, Tahir Aneela, 이준오(202010128), Balcha Kidus Elias |
+| 팀장 | 이준오 (202010128) |
+| 팀원 | Vangala Hemanth Reddy, Tahir Aneela, Balcha Kidus Elias |
+
+R&R 상세는 [docs/team_rnr.md](docs/team_rnr.md) 참고.
 
 ## 수업 일정 (2026 Fall, 9/3 ~ 12/17, 매주 목 13:00~18:00)
 
