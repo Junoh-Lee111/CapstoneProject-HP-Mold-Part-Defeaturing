@@ -69,7 +69,7 @@ CAE(Computer-Aided Engineering) 해석을 수행하기 전, 실제 제품 설계
 
 ## 9. 미결정 사항 / 다음 액션
 
-- [ ] STEP 파일 처리 라이브러리 선정 (python-occ, FreeCAD API 등 비교)
+- [x] STEP 파일 처리 라이브러리 선정 → [docs/step_library_comparison.md](step_library_comparison.md) 참고 (pythonocc-core + occwl 채택)
 - [ ] 피처 인식에 사용할 3D 딥러닝 접근법 조사 (mesh-based vs. B-rep graph-based)
 - [ ] HP로부터 샘플 CAD 데이터 확보 방안 확인
 - [ ] 팀원별 R&R 확정
