@@ -14,13 +14,17 @@ flowchart LR
         B["CAD Kernel Layer\n(pythonocc-core)\nSTEP parsing, B-rep access"]
         C["Graph Conversion Layer\n(occwl)\nface adjacency graph + UV sampling"]
         D["Feature Recognition Model\n(GNN, e.g. AAGNet / UV-Net)\nclassify each face/feature"]
-        E["Decision Logic\nkeep vs. remove per feature\n(rule + model confidence)"]
-        F["Feature Removal Engine\n(pythonocc-core)\nsuppress fillet/chamfer/hole/rib/boss"]
+        E["Decision Logic\nproposed keep/remove per feature\n(rule + model confidence)"]
+        F["Feature Removal Engine\n(pythonocc-core)\nsuppress fillet/chamfer/hole/rib/boss\n+ geometry healing"]
     end
 
     subgraph OUTPUT["Output"]
         G[Simplified CAD\n.STEP file]
-        H[Comparison Report\noriginal vs. defeatured]
+        H["Visual Comparison Report\nbefore/after geometry\n(no text summary)"]
+    end
+
+    subgraph REVIEW["Engineer Review (mandatory)"]
+        R["Engineer reviews H\nbefore accepting G"]
     end
 
     subgraph EVAL["Validation"]
@@ -30,10 +34,13 @@ flowchart LR
 
     A --> B --> C --> D --> E --> F --> G
     F --> H
+    H --> R
     G --> I
     G --> J
     I --> H
 ```
+
+The tool only *proposes* a defeatured result — it does not auto-finalize. Every result goes through **mandatory engineer review** via the visual comparison report (H) before being accepted; this applies to all results, not just low-confidence ones.
 
 ## 2. Offline: Model Training Pipeline
 
@@ -63,9 +70,10 @@ flowchart LR
 | CAD Kernel | pythonocc-core | Parse STEP, access face/edge/vertex, execute the final shape manipulation (feature removal) |
 | Graph Conversion | occwl | Convert B-rep into a face adjacency graph + UV parameter samples (model input format) |
 | Feature Recognition Model | GNN-family model (candidates: UV-Net/BRepNet/AAGNet/BrepMFR) | Classify each face/feature as hole/fillet/chamfer/rib/boss, etc., and whether it has a large or small impact on analysis |
-| Decision Logic | Rules + model confidence combined | Final judgment on whether a feature can be removed, based on model output (start rule-based, evolve toward learning-based) |
-| Feature Removal Engine | pythonocc-core (BRepFilletAPI, ShapeUpgrade, etc.) | Actually suppress/remove features judged removable |
-| Output | Simplified STEP + comparison report | Final deliverable |
+| Decision Logic | Rules + model confidence combined | Proposes whether a feature can be removed, based on model output (start rule-based, evolve toward learning-based) — this is a *proposal*, not a final decision |
+| Feature Removal Engine | pythonocc-core (BRepFilletAPI, ShapeUpgrade, etc.) | Suppress/remove proposed features, then run geometry healing to repair the resulting shape |
+| Output | Simplified STEP + visual comparison report | Deliverable presented to the engineer; no text summary, only a before/after visual |
+| Engineer Review | Human (mandatory) | Reviews the visual comparison report and accepts/rejects the result before it is finalized — this applies to every run, since the tool is a decision-support aid, not a fully autonomous replacement |
 | Validation | Gmsh (mesh quality), FreeCAD (visual) | Compare before/after simplification, verify success criteria (70–90% preprocessing time reduction) |
 
 ## 4. Confirmed Decisions
@@ -74,12 +82,14 @@ flowchart LR
 - [x] **Visual verification: FreeCAD.** Confirmed alongside the above — same role as originally proposed.
 - [x] **NX support is not required.** The project can proceed entirely without NX CAD access.
 - [x] **Training/test data will not come from HP.** HP's real CAD data is confidential and cannot be shared. Instead, the team will author simple CAD shapes themselves (plus public datasets like MFCAD/MFCAD++/Fusion 360 Gallery) for training and validation.
+- [x] **STEP is the only supported format.** NX-format support is out of scope entirely (not just deprioritized).
+- [x] **Comparison report is visual only.** No text summary is required — the report shows a before/after rendering of the geometry.
+- [x] **Engineer review is mandatory for every result**, not just low-confidence ones. The system is a decision-support tool that speeds up the engineer's work; it does not auto-finalize a result on its own. This resolves the earlier open question about handling model uncertainty — since every result is reviewed anyway, there's no need for separate confidence-threshold logic to decide *when* to involve a human.
 
 ## 5. Open Points (needs team discussion/approval)
 
 - [ ] Decide the final Feature Recognition Model among the candidates (UV-Net vs. BRepNet vs. AAGNet vs. BrepMFR) — see the detailed comparison in [step_library_comparison.md](step_library_comparison.md). HP mentor also flagged this as the next challenge: selecting which features to defeature, likely via AI-based training.
-- [ ] Whether to start the Decision Logic as rule-based or go learning-based from the start — related to the teammate question "what happens when the model is uncertain about removing a feature — fall back to manual human review?"
-- [ ] Comparison report format: simple text summary (e.g. "removed 5 fillets, 6 holes, 5 ribs") vs. visual before/after reference, or both — raised by a teammate
+- [ ] Whether to start the Decision Logic as rule-based or go learning-based from the start
 - [ ] Whether a web demo/UI is needed and in what form (currently assuming a batch/CLI pipeline only)
 
 ## Related Documents
