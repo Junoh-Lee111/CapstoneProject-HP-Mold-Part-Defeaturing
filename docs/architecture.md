@@ -43,7 +43,7 @@ The Feature Recognition Model is trained and deployed ahead of time, separately 
 flowchart LR
     subgraph DATA["Training Data"]
         K1["Public datasets\nMFCAD / MFCAD++ /\nFusion 360 Gallery"]
-        K2["HP sample CAD\n(secured over time)"]
+        K2["Self-authored simple CAD shapes\n(HP cannot share real CAD data\n- confidential)"]
     end
     L["Graph Conversion\n(occwl)"]
     M["Model Training\n(GNN: AAGNet / UV-Net, etc.)"]
@@ -73,6 +73,7 @@ flowchart LR
 - [x] **CAD kernel: pythonocc-core (OCCT) for STEP I/O and feature manipulation.** Confirmed 2026-09 — HP mentor Byoungho Yoo reviewed the NX license constraint and independently validated that OCCT can replace NX for geometry creation and defeaturing, with a working preliminary test.
 - [x] **Visual verification: FreeCAD.** Confirmed alongside the above — same role as originally proposed.
 - [x] **NX support is not required.** The project can proceed entirely without NX CAD access.
+- [x] **Training/test data will not come from HP.** HP's real CAD data is confidential and cannot be shared. Instead, the team will author simple CAD shapes themselves (plus public datasets like MFCAD/MFCAD++/Fusion 360 Gallery) for training and validation.
 
 ## 5. Open Points (needs team discussion/approval)
 
@@ -80,8 +81,6 @@ flowchart LR
 - [ ] Whether to start the Decision Logic as rule-based or go learning-based from the start — related to the teammate question "what happens when the model is uncertain about removing a feature — fall back to manual human review?"
 - [ ] Comparison report format: simple text summary (e.g. "removed 5 fillets, 6 holes, 5 ribs") vs. visual before/after reference, or both — raised by a teammate
 - [ ] Whether a web demo/UI is needed and in what form (currently assuming a batch/CLI pipeline only)
-- [ ] Whether training data will be provided or must be sourced independently (public datasets vs. HP samples) — raised by a teammate
-- [ ] Adjust the training pipeline schedule depending on when HP's real data becomes available
 
 ## Related Documents
 - [STEP Library Comparison](step_library_comparison.md)

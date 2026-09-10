@@ -71,7 +71,7 @@ Before running CAE (Computer-Aided Engineering) analysis, real product CAD desig
 
 - [x] Select STEP processing library → see [docs/step_library_comparison.md](step_library_comparison.md) (pythonocc-core + FreeCAD **confirmed by HP mentor**, 2026-09; occwl proposed)
 - [x] NX CAD license constraint → resolved: HP mentor confirmed NX is not required, OCCT-based tooling is sufficient
+- [x] Confirm how to obtain sample CAD data from HP → resolved: HP's real CAD data is confidential and will not be provided; the team will author simple CAD shapes itself, supplemented by public datasets
 - [ ] Investigate 3D deep learning approaches for feature recognition (mesh-based vs. B-rep graph-based)
-- [ ] Confirm how to obtain sample CAD data from HP
 - [ ] Finalize per-member R&R
 - [ ] Write team ground rules

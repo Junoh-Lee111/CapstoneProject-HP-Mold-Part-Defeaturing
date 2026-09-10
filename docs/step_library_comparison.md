@@ -60,7 +60,7 @@ Rather than building from scratch, it's recommended to reference/transfer-learn 
 
 ## 5. Public Datasets for Training/Validation
 
-Until we obtain real HP CAD data, or when data volume is insufficient, we can pretrain/validate with:
+**HP's real CAD data is confidential and will not be shared with the team** (confirmed by HP mentor). Training/validation data will instead come from: (a) simple CAD shapes the team authors itself, and (b) the public datasets below:
 
 | Dataset | Size | Labels | Notes |
 |---|---|---|---|
@@ -74,13 +74,12 @@ Until we obtain real HP CAD data, or when data volume is insufficient, we can pr
 STEP I/O + geometry manipulation   →  pythonocc-core            [CONFIRMED]
 Before/after validation            →  Gmsh (mesh quality) + FreeCAD (visual check)   [CONFIRMED]
 B-rep → graph conversion           →  occwl                     [proposed]
-Feature recognition model          →  AAGNet or a custom model based on UV-Net (pretrain on MFCAD/MFCAD++ or Fusion 360 Gallery → fine-tune on HP data)   [open — see §8]
+Feature recognition model          →  AAGNet or a custom model based on UV-Net (pretrain on MFCAD/MFCAD++/Fusion 360 Gallery + self-authored shapes; no HP data)   [open — see §8]
 ```
 
 ## 7. Open Questions
 - [ ] Confirm occwl is compatible with the latest pythonocc-core version (pin versions after installing)
 - [ ] Prototype a pythonocc-core loading pipeline using Fusion 360 Gallery STEP data
-- [ ] Confirm the timeline for obtaining real CAD samples from HP
 
 ## 8. HP Validation (2026-09)
 
@@ -90,6 +89,7 @@ HP mentor Byoungho Yoo reviewed the CAD license constraint (the team has no acce
 - **FreeCAD** can be used for visualizing/verifying the resulting geometry — matches what this document had already proposed.
 - Caveat: only tested on simple geometry so far; behavior on more complex real parts still needs validation.
 - He flagged the same next challenge this document identifies in §4: deciding **which features to select for defeaturing**, which he also expects will need AI-based training to identify automatically.
+- HP's real CAD data is confidential and **will not be provided**. Instead, HP suggested the team create simple shapes itself for the defeaturing pipeline (see §5).
 
 This confirms the CAD kernel layer (pythonocc-core + FreeCAD) as **settled**. The feature recognition model choice (UV-Net/BRepNet/AAGNet/BrepMFR) remains open and will likely be the main technical discussion with HP going forward.
 
