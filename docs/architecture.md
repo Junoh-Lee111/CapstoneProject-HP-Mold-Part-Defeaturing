@@ -71,7 +71,7 @@ flowchart LR
 | Graph Conversion | occwl | Convert B-rep into a face adjacency graph + UV parameter samples (model input format) |
 | Feature Recognition Model | GNN-family model (candidates: UV-Net/BRepNet/AAGNet/BrepMFR) | Classify each face/feature as hole/fillet/chamfer/rib/boss, etc., and whether it has a large or small impact on analysis |
 | Decision Logic | Rules + model confidence combined | Proposes whether a feature can be removed, based on model output (start rule-based, evolve toward learning-based) — this is a *proposal*, not a final decision |
-| Feature Removal Engine | pythonocc-core (BRepFilletAPI, ShapeUpgrade, etc.) | Suppress/remove proposed features, then run geometry healing to repair the resulting shape |
+| Feature Removal Engine | pythonocc-core (BRepFilletAPI, ShapeUpgrade, etc.) | Suppress/remove proposed features, then run geometry healing to repair the resulting shape into a valid, watertight model |
 | Output | Simplified STEP + visual comparison report | Deliverable presented to the engineer; no text summary, only a before/after visual |
 | Engineer Review | Human (mandatory) | Reviews the visual comparison report and accepts/rejects the result before it is finalized — this applies to every run, since the tool is a decision-support aid, not a fully autonomous replacement |
 | Validation | Gmsh (mesh quality), FreeCAD (visual) | Compare before/after simplification, verify success criteria (70–90% preprocessing time reduction) |
