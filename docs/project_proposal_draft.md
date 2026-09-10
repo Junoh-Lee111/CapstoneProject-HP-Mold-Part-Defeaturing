@@ -1,76 +1,76 @@
-# 프로젝트 제안서 (초안) — Mold-Part Defeaturing
+# Project Proposal (Draft) — Mold-Part Defeaturing
 
-> 2026 캡스톤디자인(창의종합설계) · Week 2 (9/10) 과제
-> 참여기업: HP Printing Korea | 멘토: Byoungho Yoo (CAE) | 담당교수: Edward Youngil Kim
+> 2026 Capstone Design · Week 2 (9/10) deliverable
+> Company Partner: HP Printing Korea | Mentor: Byoungho Yoo (CAE) | Supervising Professor: Edward Youngil Kim
 
-## 1. 과제 개요
+## 1. Project Overview
 
-**과제명**: AI 기반 금형/부품 CAD 형상 단순화(Mold-Part Defeaturing) 자동화
+**Title**: AI-based Mold/Part CAD Shape Simplification (Mold-Part Defeaturing) Automation
 
-CAE(Computer-Aided Engineering) 해석을 수행하기 전, 실제 제품 설계에는 존재하지만 구조/유동 해석 결과에 큰 영향을 주지 않는 세부 형상(hole, fillet, chamfer, rib, boss, emboss 등)이 다수 포함되어 있다. 이러한 세부 형상은 메쉬 생성 시간과 해석 시간을 크게 늘리는 반면, 해석 정확도에 대한 기여는 낮다. 본 프로젝트는 이러한 불필요한 형상을 AI가 자동으로 인식하고 제거하여, CAE 해석에 바로 사용할 수 있는 단순화된 CAD 모델을 생성하는 자동화 기술을 개발한다.
+Before running CAE (Computer-Aided Engineering) analysis, real product CAD designs contain many small shape details (holes, fillets, chamfers, ribs, bosses, embosses, etc.) that have little impact on structural/flow analysis results. These details significantly increase mesh generation and analysis time while contributing little to analysis accuracy. This project develops automation technology that has AI automatically recognize and remove such unnecessary shapes, producing a simplified CAD model ready for CAE analysis.
 
-## 2. 배경 및 문제 정의 (Why)
+## 2. Background & Problem Statement (Why)
 
-- CAE 엔지니어가 해석 전 CAD 모델의 불필요한 형상을 수작업으로 제거(defeaturing)하는 데 상당한 시간이 소요됨
-- 수작업 defeaturing은 엔지니어의 경험에 의존하며, 일관성이 떨어지고 대량의 부품에 대해 확장하기 어려움
-- HP Printing의 대량 시뮬레이션/제품 개발 프로세스에서 CAD 전처리가 병목으로 작용
+- CAE engineers spend significant time manually removing unnecessary shapes from CAD models before analysis ("defeaturing")
+- Manual defeaturing depends on engineer experience, is inconsistent, and doesn't scale to large volumes of parts
+- CAD preprocessing is a bottleneck in HP Printing's high-volume simulation / product development process
 
-## 3. 목표 (Objectives)
+## 3. Objectives
 
-1. CAE 지오메트리 전처리 자동화
-2. 형상 피처(hole, fillet, chamfer, rib, boss, emboss)의 중요도를 학습하여 제거 여부를 판단
-3. 수작업 개입 최소화
+1. Automate CAE geometry preprocessing
+2. Learn to judge the importance of shape features (hole, fillet, chamfer, rib, boss, emboss) and decide which to remove
+3. Minimize manual intervention
 
-## 4. Scope (MVP 기준)
+## 4. Scope (MVP)
 
-- **Input**: Mold/Part CAD 파일 (.STEP 우선순위 1, NX 우선순위 2)
+- **Input**: Mold/Part CAD files (.STEP priority 1, NX priority 2)
 - **Output**:
-  - 시뮬레이션 대응 가능한 단순화 CAD 모델 (.STEP)
-  - 원본 vs 단순화 형상 비교 리포트
-- 정확도와 해석 결과에 미치는 영향 최소화를 최우선 목표로 하며, 지원 형상 종류를 넓히는 것보다 핵심 피처(hole/fillet/chamfer/rib/boss)에 대한 정확도를 우선한다.
+  - Simulation-ready simplified CAD model (.STEP)
+  - Original vs. simplified shape comparison report
+- The top priority is accuracy and minimizing impact on analysis results; accuracy on core features (hole/fillet/chamfer/rib/boss) takes precedence over broadening the range of supported shape types.
 
-### Stretch Goals (MVP 이후, 논의 필요)
-- emboss 등 추가 피처 유형 지원 확대
-- NX 포맷 직접 지원
-- 해석 결과(응력/변형 등) 기반 자동 검증 루프
+### Stretch Goals (post-MVP, needs discussion)
+- Expand support to additional feature types such as emboss
+- Direct NX format support
+- Automated validation loop based on analysis results (stress/deformation, etc.)
 
-## 5. 필요 도메인 지식
+## 5. Required Domain Knowledge
 
-- 형상 피처 인식 (hole, fillet, chamfer, rib, boss)
-- 3D 형상 분류 / ML·딥러닝 (예: point cloud, mesh, B-rep 기반 모델)
-- CAD 파일 포맷(STEP) 파싱 및 조작 (예: OpenCASCADE, python-occ)
-- Defeaturing 규칙 정의 및 학습 데이터 구축
+- Shape feature recognition (hole, fillet, chamfer, rib, boss)
+- 3D shape classification / ML & deep learning (e.g., point cloud, mesh, B-rep-based models)
+- CAD file format (STEP) parsing and manipulation (e.g., OpenCASCADE, python-occ)
+- Defining defeaturing rules and building training data
 
-## 6. 기대효과
+## 6. Expected Value
 
-- CAD 전처리 시간 70~90% 절감
-- 대량 시뮬레이션 자동화 기반 마련
-- HP Printing 제품 개발 시뮬레이션 효율 향상
+- 70–90% reduction in CAD preprocessing time
+- Foundation for high-volume simulation automation
+- Improved simulation efficiency for HP Printing product development
 
-## 7. 팀 구성 및 R&R (초안 — 논의 필요)
+## 7. Team & R&R (draft — pending discussion)
 
-| 이름 | 역할 |
+| Name | Role |
 |---|---|
+| Junoh Lee | TBD |
 | Vangala Hemanth Reddy | TBD |
 | Tahir Aneela | TBD |
-| 이준오 | TBD |
 | Balcha Kidus Elias | TBD |
 
-## 8. 일정 (수업 일정 기준, [README.md](../README.md) 참고)
+## 8. Timeline
 
-- W3 (9/17): 시스템 아키텍처 다이어그램, FR/NFR 작성
-- W4 (10/1): 제안서 발표, HLD 착수
-- W6 (10/15): HLD 제출
-- W7 (10/22): LLD 제출
-- W8 (10/29): 기업 멘토 대상 진행상황 발표
-- W9~W11: 구현 (프로토타입 → 통합/테스트)
-- W13 (12/3): 성능/정확도 분석
-- W15 (12/17): 최종 발표 및 시연
+- W3: system architecture diagram, FR/NFR
+- W4: proposal presentation, start HLD
+- W6: submit HLD
+- W7: submit LLD
+- W8: progress presentation to company mentor
+- W9–W11: implementation (prototype → integration/testing)
+- W13: performance/accuracy analysis
+- W15: final presentation & demo
 
-## 9. 미결정 사항 / 다음 액션
+## 9. Open Items / Next Actions
 
-- [x] STEP 파일 처리 라이브러리 선정 → [docs/step_library_comparison.md](step_library_comparison.md) 참고 (pythonocc-core + occwl 채택)
-- [ ] 피처 인식에 사용할 3D 딥러닝 접근법 조사 (mesh-based vs. B-rep graph-based)
-- [ ] HP로부터 샘플 CAD 데이터 확보 방안 확인
-- [ ] 팀원별 R&R 확정
-- [ ] 팀 그라운드룰 작성
+- [x] Select STEP processing library → see [docs/step_library_comparison.md](step_library_comparison.md) (pythonocc-core + occwl adopted)
+- [ ] Investigate 3D deep learning approaches for feature recognition (mesh-based vs. B-rep graph-based)
+- [ ] Confirm how to obtain sample CAD data from HP
+- [ ] Finalize per-member R&R
+- [ ] Write team ground rules

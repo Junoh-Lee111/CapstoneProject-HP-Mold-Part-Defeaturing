@@ -1,89 +1,89 @@
-# STEP 처리 라이브러리 비교조사
+# STEP Processing Library Comparison
 
-> 목적: Mold-Part Defeaturing 프로젝트에서 (1) STEP 파일을 읽고/쓰고/조작하는 CAD 커널 레이어와
-> (2) 형상 피처를 AI가 인식할 수 있는 표현(그래프 등)으로 바꾸는 레이어에 쓸 라이브러리를 선정하기 위한 조사.
-> 조사일: 2026-09 (최신 릴리스 기준 변동 가능, 실제 도입 전 버전 재확인 필요)
+> Purpose: research to select libraries for (1) the CAD kernel layer that reads/writes/manipulates STEP files, and
+> (2) the layer that converts shape features into a representation (e.g. a graph) AI can recognize, for the Mold-Part Defeaturing project.
+> Researched: 2026-09 (subject to change with newer releases; re-check versions before actual adoption)
 
-## 1. 전체 그림
+## 1. Big Picture
 
 ```
-STEP 파일(.step)
-   │  ① 읽기/파싱 (CAD 커널)
+STEP file (.step)
+   │  ① Read/parse (CAD kernel)
    ▼
-B-rep 모델 (Face/Edge/Vertex 위상 구조)
-   │  ② 그래프 표현 변환 (ML용 wrapper)
+B-rep model (Face/Edge/Vertex topology)
+   │  ② Graph representation conversion (ML wrapper)
    ▼
-Face adjacency graph + UV 샘플링 등
-   │  ③ 피처 인식 모델 (GNN 등)
+Face adjacency graph + UV sampling, etc.
+   │  ③ Feature recognition model (GNN, etc.)
    ▼
-"이 face/edge는 hole/fillet/chamfer/rib/boss 이다" 라벨
-   │  ④ 제거 로직 (다시 CAD 커널로)
+Label: "this face/edge is a hole/fillet/chamfer/rib/boss"
+   │  ④ Removal logic (back to the CAD kernel)
    ▼
-단순화된 STEP 파일 출력
+Simplified STEP file output
 ```
 
-①④는 **CAD 커널 라이브러리**, ②는 **ML 연결용 wrapper**, ③은 **피처 인식 모델(우리가 학습/구현)** 영역이다.
+Steps ①④ are the **CAD kernel library**, ② is the **ML-connecting wrapper**, and ③ is the **feature recognition model** (which we train/implement ourselves).
 
-## 2. CAD 커널 라이브러리 비교 (①④ 담당)
+## 2. CAD Kernel Library Comparison (handles ①④)
 
-모두 내부적으로 **Open CASCADE Technology (OCCT)** — C++로 작성된 오픈소스 3D CAD 커널 — 를 기반으로 한다. 즉 "어느 걸 고를지"는 "OCCT를 얼마나 raw하게 다룰지 vs. 편하게 감싸서 쓸지"의 문제에 가깝다.
+All of these are internally based on **Open CASCADE Technology (OCCT)** — an open-source 3D CAD kernel written in C++. So the real question isn't "which kernel" but "how raw vs. how wrapped do we want our access to OCCT to be."
 
-| 라이브러리 | 성격 | STEP 지원 | 장점 | 단점 | 추천 용도 |
+| Library | Nature | STEP Support | Pros | Cons | Recommended Use |
 |---|---|---|---|---|---|
-| **pythonocc-core** | OCCT의 거의 전체 C++ API(수천 개 클래스)를 파이썬으로 1:1 바인딩 | IGES/STEP/STL/PLY/OBJ/GLTF 등 폭넓은 데이터 교환 지원 | 가장 low-level, face/edge/vertex 단위까지 직접 제어 가능 → 피처 인식·제거 로직 구현에 필수적인 세밀한 접근 가능 | API가 C++ 스타일 그대로라 러닝커브 있음, 문서가 빈약한 편 | **핵심 STEP I/O 및 피처 조작 레이어** |
-| **build123d** | CadQuery에서 파생되어 독립한 최신 파이썬 CAD 프레임워크. OCP(OCCT의 또 다른 파이썬 바인딩)를 기반 | STEP 등 주요 포맷 export/import | 문법이 파이썬스럽고 깔끔, 형상 조작 API가 정돈되어 있음, OCP의 저수준 타입에도 접근 가능 | 파라메트릭 "모델링"(설계)에 초점 → 기존 모델을 "분석/분해"하는 우리 용도로는 다소 무거울 수 있음 | 필요시 결과 검증/시각화용 보조 |
-| **CadQuery** | build123d의 전신, 파라메트릭 CAD 스크립팅에 특화 | STEP, STL, AMF, 3MF 등 export | 직관적 API, 초보자 친화적 | build123d 대비 저수준(OCP raw type) 접근이 제한적 | 사용 우선순위 낮음 (build123d로 대체 가능) |
-| **FreeCAD Python API** | FreeCAD(오픈소스 CAD 프로그램) 내장 파이썬 API, 역시 OCCT 기반 | STEP 읽기/쓰기 양호, GUI 병행 가능 | GUI로 결과를 눈으로 바로 확인 가능 (디버깅에 유용) | 무거운 애플리케이션 통째로 필요, 서버/배치 자동화에는 부적합 | 프로토타입 단계에서 결과 육안 검증용 |
-| **Gmsh** | 메쉬 생성 전문 라이브러리 (OCCT geometry 연동 가능) | STEP import 후 메쉬 생성 | 실제 CAE 메쉬 품질 평가(우리 프로젝트의 "성공 기준" 검증)에 필요 | CAD 형상 편집 자체는 지원 X, 메쉬 생성 전용 | **평가 단계**(단순화 전후 메쉬 품질/해석 비교)에 활용 |
+| **pythonocc-core** | Near 1:1 Python binding of almost the entire OCCT C++ API (thousands of classes) | Broad data exchange support: IGES/STEP/STL/PLY/OBJ/GLTF, etc. | Most low-level; direct control down to face/edge/vertex level → the fine-grained access required to implement feature recognition/removal logic | API mirrors the C++ style, so there's a learning curve; documentation is sparse | **Core STEP I/O and feature manipulation layer** |
+| **build123d** | Latest independent Python CAD framework, derived from CadQuery. Built on OCP (another Python binding of OCCT) | Export/import of major formats including STEP | Pythonic, clean syntax; well-organized shape manipulation API; can also access OCP's low-level types | Optimized for parametric "modeling" (designing new shapes) → may be heavier than needed for our "analyze/decompose an existing model" use case | Auxiliary use for result verification/visualization if needed |
+| **CadQuery** | Predecessor of build123d, specialized in parametric CAD scripting | Export to STEP, STL, AMF, 3MF, etc. | Intuitive API, beginner-friendly | More limited low-level (raw OCP type) access compared to build123d | Lower priority (can be replaced by build123d) |
+| **FreeCAD Python API** | Python API built into FreeCAD (an open-source CAD program), also OCCT-based | Good STEP read/write, can run alongside the GUI | Results can be checked visually via the GUI (useful for debugging) | Requires the whole heavyweight application; not suited for server/batch automation | Visual verification of results during the prototyping phase |
+| **Gmsh** | Dedicated mesh generation library (can interoperate with OCCT geometry) | Mesh generation after STEP import | Needed for evaluating actual CAE mesh quality (validating our project's "success criteria") | Does not support CAD shape editing itself; mesh generation only | Use in the **evaluation stage** (comparing mesh quality/analysis before and after simplification) |
 
-**결론**: 코어 레이어는 **pythonocc-core**로 간다. 이유:
-- OCCT의 거의 모든 기능(face/edge 순회, 곡률 계산, boolean 연산, fillet/chamfer 제거 API 등)에 직접 접근 가능해야 "피처를 인식해서 제거"하는 이 프로젝트의 핵심 로직을 구현할 수 있음
-- build123d/CadQuery는 "새 모델을 설계"하는 데 최적화되어 있어서, "기존 모델을 분석하고 일부만 제거"하는 우리 워크플로우에는 pythonocc-core가 더 적합
-- 결과 시각화·검증 단계에서는 FreeCAD를 보조로 사용 가능
+**Conclusion**: the core layer will be **pythonocc-core**. Reasons:
+- We need direct access to almost all of OCCT's functionality (face/edge traversal, curvature computation, boolean operations, fillet/chamfer removal APIs, etc.) to implement the core logic of "recognize and remove features"
+- build123d/CadQuery are optimized for "designing a new model," so pythonocc-core fits our workflow of "analyzing an existing model and removing only part of it" better
+- FreeCAD can be used as an aid for result visualization/verification
 
-## 3. ML 연결용 wrapper (②)
+## 3. ML-Connecting Wrapper (②)
 
-| 라이브러리 | 설명 | 비고 |
+| Library | Description | Notes |
 |---|---|---|
-| **occwl** | Autodesk AI Lab이 공개한 pythonocc 위의 경량 wrapper. B-rep → face adjacency graph 변환, face/edge의 UV 파라미터 도메인 샘플링을 지원 | UV-Net 등 여러 CAD 딥러닝 논문의 공식 구현체가 이 라이브러리를 사용. **B-rep을 그래프로 바꾸는 반복 작업을 직접 짤 필요가 없어짐** → 우리 프로젝트에서 채택 유력 |
+| **occwl** | A lightweight wrapper on top of pythonocc, released by Autodesk AI Lab. Supports B-rep → face adjacency graph conversion and UV parameter domain sampling for faces/edges | Used by the official implementations of several CAD deep learning papers, including UV-Net. **Removes the need to hand-write the repetitive B-rep-to-graph conversion logic** → a strong candidate for adoption in our project |
 
-## 4. 피처 인식 모델(③) — 참고할 기존 연구/구현체
+## 4. Feature Recognition Models (③) — Existing Research/Implementations to Reference
 
-직접 밑바닥부터 만들기보다 아래 공개 구현체를 참고/전이학습 하는 것을 권장:
+Rather than building from scratch, it's recommended to reference/transfer-learn from the following public implementations:
 
-| 이름 | 방식 | 비고 |
+| Name | Approach | Notes |
 |---|---|---|
-| **UV-Net** (Autodesk) | face의 UV grid를 CNN으로, face adjacency graph를 GNN으로 처리 후 결합 | occwl과 세트로 쓰기 좋음 |
-| **BRepNet** (Autodesk) | B-rep의 coedge(방향 있는 edge) 기준으로 컨볼루션 커널 정의 → 중간 표현 변환 없이 B-rep에서 직접 학습 | topology-aware, 논문/구현체 공개 |
-| **AAGNet** | Attributed Adjacency Graph(gAAG) 기반, 기하/위상/추가 속성을 모두 그래프에 반영해 machining feature 인식 | 비교적 최신, GitHub에 학습 코드+데이터 생성 도구 포함 → **우리 baseline 후보 1순위** |
-| **BrepMFR** | Transformer + graph attention 기반 machining feature recognition, domain adaptation 지원 | 서로 다른 CAD 소스 간 일반화 성능 좋음 (HP 실데이터가 학습 데이터와 다를 때 유리) |
+| **UV-Net** (Autodesk) | Processes each face's UV grid with a CNN and the face adjacency graph with a GNN, then combines them | Pairs well with occwl |
+| **BRepNet** (Autodesk) | Defines convolution kernels directly on B-rep coedges (directed edges) → learns directly from B-rep without an intermediate representation | Topology-aware; paper and implementation are public |
+| **AAGNet** | Uses an Attributed Adjacency Graph (gAAG) that encodes geometry, topology, and extra attributes together for machining feature recognition | Relatively recent; GitHub includes both training code and a data-generation tool → **top candidate baseline for us** |
+| **BrepMFR** | Transformer + graph attention-based machining feature recognition with domain adaptation support | Generalizes well across different CAD sources (useful if HP's real data differs from the training data) |
 
-## 5. 학습/검증용 공개 데이터셋
+## 5. Public Datasets for Training/Validation
 
-우리 프로젝트는 HP 실제 CAD를 받기 전까지, 혹은 데이터 양이 부족할 때 아래로 사전학습/검증 가능:
+Until we obtain real HP CAD data, or when data volume is insufficient, we can pretrain/validate with:
 
-| 데이터셋 | 규모 | 라벨 | 비고 |
+| Dataset | Size | Labels | Notes |
 |---|---|---|---|
-| **MFCAD** | 15,488개 모델 | 16종 machining feature (chamfer, hole 등), 평면 face만 | 비교적 단순, 시작하기 좋음 |
-| **MFCAD++** | 59,655개 모델 | 24종 feature, 곡면 포함, 모델당 3~10개 feature | MFCAD보다 현실적/어려움 |
-| **Fusion 360 Gallery – Segmentation Dataset** | 35,858개 모델 (STEP 포맷 제공) | face별 8개 카테고리 (ExtrudeSide/End, CutSide/End, Fillet, Chamfer, RevolveSide/End) | Autodesk 공식 배포, STEP 원본 포함이라 pythonocc/occwl 파이프라인 검증에 바로 사용 가능 |
+| **MFCAD** | 15,488 models | 16 machining feature types (chamfer, hole, etc.), planar faces only | Relatively simple, good starting point |
+| **MFCAD++** | 59,655 models | 24 feature types, includes curved surfaces, 3–10 features per model | More realistic/challenging than MFCAD |
+| **Fusion 360 Gallery – Segmentation Dataset** | 35,858 models (STEP format provided) | 8 categories per face (ExtrudeSide/End, CutSide/End, Fillet, Chamfer, RevolveSide/End) | Officially released by Autodesk; includes original STEP files, so it can be used immediately to validate the pythonocc/occwl pipeline |
 
-## 6. 종합 결론 (초기 기술 스택 제안)
+## 6. Overall Conclusion (proposed initial tech stack)
 
 ```
-STEP I/O + 형상 조작   →  pythonocc-core
-B-rep → 그래프 변환    →  occwl
-피처 인식 모델          →  AAGNet 또는 UV-Net 기반 커스텀 (MFCAD/MFCAD++ or Fusion360 Gallery로 사전학습 → HP 데이터로 파인튜닝)
-단순화 전후 검증        →  Gmsh (메쉬 품질) + FreeCAD(육안 검증)
+STEP I/O + geometry manipulation   →  pythonocc-core
+B-rep → graph conversion           →  occwl
+Feature recognition model          →  AAGNet or a custom model based on UV-Net (pretrain on MFCAD/MFCAD++ or Fusion 360 Gallery → fine-tune on HP data)
+Before/after validation            →  Gmsh (mesh quality) + FreeCAD (visual check)
 ```
 
 ## 7. Open Questions
-- [ ] pythonocc-core의 fillet/chamfer 자동 제거(defeaturing) API 실제 동작 검증 (`BRepFilletAPI`, `ShapeUpgrade` 등)
-- [ ] occwl이 최신 pythonocc-core 버전과 호환되는지 확인 (설치 후 버전 고정)
-- [ ] Fusion 360 Gallery STEP 데이터로 pythonocc-core 로딩 파이프라인 프로토타입 (W3 목표)
-- [ ] HP로부터 실제 CAD 샘플 확보 일정 확인
+- [ ] Verify pythonocc-core's fillet/chamfer auto-removal (defeaturing) APIs actually work as expected (`BRepFilletAPI`, `ShapeUpgrade`, etc.)
+- [ ] Confirm occwl is compatible with the latest pythonocc-core version (pin versions after installing)
+- [ ] Prototype a pythonocc-core loading pipeline using Fusion 360 Gallery STEP data (W3 goal)
+- [ ] Confirm the timeline for obtaining real CAD samples from HP
 
-## 참고 자료
+## References
 - [Top Open Source CAD APIs and Libraries for Developers in 2026](https://blog.fileformat.com/cad/top-open-source-cad-api-and-libraries-for-developers-in-2026)
 - [build123d GitHub](https://github.com/gumyr/build123d)
 - [CadQuery Documentation](https://cadquery.readthedocs.io/en/latest/)

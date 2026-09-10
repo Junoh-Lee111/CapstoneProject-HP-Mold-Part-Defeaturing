@@ -38,7 +38,7 @@ This project builds an AI system that automatically recognizes these shape featu
 |---|---|
 | Company Partner | HP Printing Korea |
 | Mentor | Byoungho Yoo (CAE) |
-| Team Lead | 이준오 (Junoh Lee) |
+| Team Lead | Junoh Lee |
 | Member | Vangala Hemanth Reddy |
 | Member | Tahir Aneela |
 | Member | Balcha Kidus Elias |
