@@ -18,6 +18,12 @@ models/*
 # OS
 .DS_Store
 
+# Office lock files
+~$*.docx
+~$*.doc
+~$*.xlsx
+~$*.pptx
+
 # IDE
 .vscode/
 .idea/
