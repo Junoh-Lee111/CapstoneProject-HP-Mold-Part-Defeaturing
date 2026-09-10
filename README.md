@@ -8,7 +8,7 @@ Before running CAE (Computer-Aided Engineering) simulations, mold/part CAD model
 
 This project builds an AI system that automatically recognizes these shape features and removes the ones that are unnecessary for analysis, producing a simplified CAD model ready for CAE simulation.
 
-- **Input**: Mold/Part CAD files (.STEP, priority 1; NX, priority 2)
+- **Input**: Mold/Part CAD files (.STEP). NX CAD access is not required — HP confirmed OCCT-based open-source tooling can replace NX for this project.
 - **Output**: Simplified CAD model suitable for CAE analysis (.STEP)
 - **Core task**: Recognize shape features (hole, fillet, chamfer, rib, boss, emboss) and remove unnecessary ones while minimizing the impact on analysis accuracy
 
@@ -25,7 +25,7 @@ This project builds an AI system that automatically recognizes these shape featu
 ### Output
 - Simulation-ready simplified CAD (.STEP)
 - Original vs. defeatured comparison report
-- Input format: STEP (priority 1), NX (priority 2)
+- Input format: STEP
 
 ### Expected Value
 - 70–90% reduction in CAD preprocessing time
@@ -45,14 +45,14 @@ This project builds an AI system that automatically recognizes these shape featu
 
 Detailed role assignment (in progress): [docs/team_rnr.md](docs/team_rnr.md)
 
-## Tech Stack (proposed, pending final confirmation)
+## Tech Stack
 
-| Layer | Choice |
-|---|---|
-| STEP I/O & geometry manipulation | pythonocc-core |
-| B-rep → graph conversion (for ML) | occwl |
-| Feature recognition model (candidates) | UV-Net / BRepNet / AAGNet / BrepMFR |
-| Simplification quality validation | Gmsh (mesh quality), FreeCAD (visual check) |
+| Layer | Choice | Status |
+|---|---|---|
+| STEP I/O & geometry manipulation | pythonocc-core (OCCT) | **Confirmed** (validated by HP mentor) |
+| Simplification quality validation | FreeCAD (visual check), Gmsh (mesh quality) | **Confirmed** |
+| B-rep → graph conversion (for ML) | occwl | Proposed |
+| Feature recognition model (candidates) | UV-Net / BRepNet / AAGNet / BrepMFR | Open — pending decision |
 
 See [docs/step_library_comparison.md](docs/step_library_comparison.md) for the full comparison and rationale.
 

@@ -36,7 +36,7 @@ All of these are internally based on **Open CASCADE Technology (OCCT)** — an o
 | **FreeCAD Python API** | Python API built into FreeCAD (an open-source CAD program), also OCCT-based | Good STEP read/write, can run alongside the GUI | Results can be checked visually via the GUI (useful for debugging) | Requires the whole heavyweight application; not suited for server/batch automation | Visual verification of results during the prototyping phase |
 | **Gmsh** | Dedicated mesh generation library (can interoperate with OCCT geometry) | Mesh generation after STEP import | Needed for evaluating actual CAE mesh quality (validating our project's "success criteria") | Does not support CAD shape editing itself; mesh generation only | Use in the **evaluation stage** (comparing mesh quality/analysis before and after simplification) |
 
-**Conclusion**: the core layer will be **pythonocc-core**. Reasons:
+**Conclusion (CONFIRMED — see §8): the core layer is pythonocc-core**, with FreeCAD for visual verification. This also means **NX is not required** for the project. Reasons:
 - We need direct access to almost all of OCCT's functionality (face/edge traversal, curvature computation, boolean operations, fillet/chamfer removal APIs, etc.) to implement the core logic of "recognize and remove features"
 - build123d/CadQuery are optimized for "designing a new model," so pythonocc-core fits our workflow of "analyzing an existing model and removing only part of it" better
 - FreeCAD can be used as an aid for result visualization/verification
@@ -68,20 +68,30 @@ Until we obtain real HP CAD data, or when data volume is insufficient, we can pr
 | **MFCAD++** | 59,655 models | 24 feature types, includes curved surfaces, 3–10 features per model | More realistic/challenging than MFCAD |
 | **Fusion 360 Gallery – Segmentation Dataset** | 35,858 models (STEP format provided) | 8 categories per face (ExtrudeSide/End, CutSide/End, Fillet, Chamfer, RevolveSide/End) | Officially released by Autodesk; includes original STEP files, so it can be used immediately to validate the pythonocc/occwl pipeline |
 
-## 6. Overall Conclusion (proposed initial tech stack)
+## 6. Overall Conclusion (tech stack)
 
 ```
-STEP I/O + geometry manipulation   →  pythonocc-core
-B-rep → graph conversion           →  occwl
-Feature recognition model          →  AAGNet or a custom model based on UV-Net (pretrain on MFCAD/MFCAD++ or Fusion 360 Gallery → fine-tune on HP data)
-Before/after validation            →  Gmsh (mesh quality) + FreeCAD (visual check)
+STEP I/O + geometry manipulation   →  pythonocc-core            [CONFIRMED]
+Before/after validation            →  Gmsh (mesh quality) + FreeCAD (visual check)   [CONFIRMED]
+B-rep → graph conversion           →  occwl                     [proposed]
+Feature recognition model          →  AAGNet or a custom model based on UV-Net (pretrain on MFCAD/MFCAD++ or Fusion 360 Gallery → fine-tune on HP data)   [open — see §8]
 ```
 
 ## 7. Open Questions
-- [ ] Verify pythonocc-core's fillet/chamfer auto-removal (defeaturing) APIs actually work as expected (`BRepFilletAPI`, `ShapeUpgrade`, etc.)
 - [ ] Confirm occwl is compatible with the latest pythonocc-core version (pin versions after installing)
-- [ ] Prototype a pythonocc-core loading pipeline using Fusion 360 Gallery STEP data (W3 goal)
+- [ ] Prototype a pythonocc-core loading pipeline using Fusion 360 Gallery STEP data
 - [ ] Confirm the timeline for obtaining real CAD samples from HP
+
+## 8. HP Validation (2026-09)
+
+HP mentor Byoungho Yoo reviewed the CAD license constraint (the team has no access to NX, HP's in-house CAD software) and confirmed the project can proceed without it:
+
+- **OCCT** (the open-source kernel pythonocc-core binds to) can replace NX for geometry creation and defeaturing — he ran a preliminary test on a simple geometry and it worked.
+- **FreeCAD** can be used for visualizing/verifying the resulting geometry — matches what this document had already proposed.
+- Caveat: only tested on simple geometry so far; behavior on more complex real parts still needs validation.
+- He flagged the same next challenge this document identifies in §4: deciding **which features to select for defeaturing**, which he also expects will need AI-based training to identify automatically.
+
+This confirms the CAD kernel layer (pythonocc-core + FreeCAD) as **settled**. The feature recognition model choice (UV-Net/BRepNet/AAGNet/BrepMFR) remains open and will likely be the main technical discussion with HP going forward.
 
 ## References
 - [Top Open Source CAD APIs and Libraries for Developers in 2026](https://blog.fileformat.com/cad/top-open-source-cad-api-and-libraries-for-developers-in-2026)

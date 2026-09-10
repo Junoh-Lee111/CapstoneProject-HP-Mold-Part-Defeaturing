@@ -1,6 +1,6 @@
-# System Architecture (Draft — W3)
+# System Architecture (W3)
 
-> **Status: draft, pending approval.** The architecture below is drawn from the recommended tech stack researched in [step_library_comparison.md](step_library_comparison.md), and will be finalized after the team lead's approval.
+> **Status: CAD kernel layer confirmed** (pythonocc-core/OCCT + FreeCAD — validated by HP mentor Byoungho Yoo, 2026-09, see [step_library_comparison.md](step_library_comparison.md) §8). **Feature Recognition Model and Decision Logic still open**, pending team discussion.
 
 ## 1. Overall Pipeline
 
@@ -68,11 +68,19 @@ flowchart LR
 | Output | Simplified STEP + comparison report | Final deliverable |
 | Validation | Gmsh (mesh quality), FreeCAD (visual) | Compare before/after simplification, verify success criteria (70–90% preprocessing time reduction) |
 
-## 4. Open Points (needs team discussion/approval)
+## 4. Confirmed Decisions
 
-- [ ] Decide the final Feature Recognition Model among the candidates (UV-Net vs. BRepNet vs. AAGNet vs. BrepMFR) — see the detailed comparison in the "tech stack rationale" discussion
-- [ ] Whether to start the Decision Logic as rule-based or go learning-based from the start
+- [x] **CAD kernel: pythonocc-core (OCCT) for STEP I/O and feature manipulation.** Confirmed 2026-09 — HP mentor Byoungho Yoo reviewed the NX license constraint and independently validated that OCCT can replace NX for geometry creation and defeaturing, with a working preliminary test.
+- [x] **Visual verification: FreeCAD.** Confirmed alongside the above — same role as originally proposed.
+- [x] **NX support is not required.** The project can proceed entirely without NX CAD access.
+
+## 5. Open Points (needs team discussion/approval)
+
+- [ ] Decide the final Feature Recognition Model among the candidates (UV-Net vs. BRepNet vs. AAGNet vs. BrepMFR) — see the detailed comparison in [step_library_comparison.md](step_library_comparison.md). HP mentor also flagged this as the next challenge: selecting which features to defeature, likely via AI-based training.
+- [ ] Whether to start the Decision Logic as rule-based or go learning-based from the start — related to the teammate question "what happens when the model is uncertain about removing a feature — fall back to manual human review?"
+- [ ] Comparison report format: simple text summary (e.g. "removed 5 fillets, 6 holes, 5 ribs") vs. visual before/after reference, or both — raised by a teammate
 - [ ] Whether a web demo/UI is needed and in what form (currently assuming a batch/CLI pipeline only)
+- [ ] Whether training data will be provided or must be sourced independently (public datasets vs. HP samples) — raised by a teammate
 - [ ] Adjust the training pipeline schedule depending on when HP's real data becomes available
 
 ## Related Documents
