@@ -36,7 +36,7 @@ All of these are internally based on **Open CASCADE Technology (OCCT)** — an o
 | **FreeCAD Python API** | Python API built into FreeCAD (an open-source CAD program), also OCCT-based | Good STEP read/write, can run alongside the GUI | Results can be checked visually via the GUI (useful for debugging) | Requires the whole heavyweight application; not suited for server/batch automation | Visual verification of results during the prototyping phase |
 | **Gmsh** | Dedicated mesh generation library (can interoperate with OCCT geometry) | Mesh generation after STEP import | Needed for evaluating actual CAE mesh quality (validating our project's "success criteria") | Does not support CAD shape editing itself; mesh generation only | Use in the **evaluation stage** (comparing mesh quality/analysis before and after simplification) |
 
-**Conclusion (CONFIRMED — see §8): the core layer is pythonocc-core**, with FreeCAD for visual verification. This also means **NX is not required** for the project. Reasons:
+**Conclusion: our own research recommendation is pythonocc-core** for the core layer, with FreeCAD for visual verification. **This specific binding is not yet confirmed by the mentor** — see §8 for what's actually confirmed (the OCCT-based approach, not a specific library) and the naming discrepancy that still needs to be resolved. This also means **NX is not required** for the project. Reasons for the pythonocc-core recommendation:
 - We need direct access to almost all of OCCT's functionality (face/edge traversal, curvature computation, boolean operations, fillet/chamfer removal APIs, etc.) to implement the core logic of "recognize and remove features"
 - build123d/CadQuery are optimized for "designing a new model," so pythonocc-core fits our workflow of "analyzing an existing model and removing only part of it" better
 - FreeCAD can be used as an aid for result visualization/verification
@@ -71,27 +71,30 @@ Rather than building from scratch, it's recommended to reference/transfer-learn 
 ## 6. Overall Conclusion (tech stack)
 
 ```
-STEP I/O + geometry manipulation   →  pythonocc-core            [CONFIRMED]
+STEP I/O + geometry manipulation   →  OCCT-based, exact binding TBD (candidates: FreeCAD-python API, cadquery; our own research favors pythonocc-core but that hasn't been put to the mentor)   [approach confirmed, binding open]
 Before/after validation            →  Gmsh (mesh quality) + FreeCAD (visual check)   [CONFIRMED]
 B-rep → graph conversion           →  occwl                     [proposed]
 Feature recognition model          →  AAGNet or a custom model based on UV-Net (pretrain on MFCAD/MFCAD++/Fusion 360 Gallery + self-authored shapes; no HP data)   [open — see §8]
 ```
 
 ## 7. Open Questions
-- [ ] Confirm occwl is compatible with the latest pythonocc-core version (pin versions after installing)
-- [ ] Prototype a pythonocc-core loading pipeline using Fusion 360 Gallery STEP data
+- [ ] **Confirm the exact CAD toolchain with the mentor.** HP's own meeting slide said "FreeCAD-python API"; the school's AI Lab server guide said "cadquery". Neither matches our own pythonocc-core recommendation — ask directly which one they mean before building on any of them.
+- [ ] Once confirmed, check compatibility with occwl (occwl is built on pythonocc-core specifically, so if the mentor's answer is cadquery or FreeCAD-python API instead, occwl may need to be swapped or reimplemented)
+- [ ] Prototype a loading pipeline using Fusion 360 Gallery STEP data with whichever toolchain is confirmed
 
 ## 8. HP Validation (2026-09)
 
 HP mentor Byoungho Yoo reviewed the CAD license constraint (the team has no access to NX, HP's in-house CAD software) and confirmed the project can proceed without it:
 
-- **OCCT** (the open-source kernel pythonocc-core binds to) can replace NX for geometry creation and defeaturing — he ran a preliminary test on a simple geometry and it worked.
+- **OCCT** (the open-source CAD kernel underlying all the Python binding candidates) can replace NX for geometry creation and defeaturing — he ran a preliminary test on a simple geometry and it worked. His meeting slide named the specific access path as **"FreeCAD-python API"**.
 - **FreeCAD** can be used for visualizing/verifying the resulting geometry — matches what this document had already proposed.
 - Caveat: only tested on simple geometry so far; behavior on more complex real parts still needs validation.
 - He flagged the same next challenge this document identifies in §4: deciding **which features to select for defeaturing**, which he also expects will need AI-based training to identify automatically.
 - HP's real CAD data is confidential and **will not be provided**. Instead, HP suggested the team create simple shapes itself for the defeaturing pipeline (see §5).
 
-This confirms the CAD kernel layer (pythonocc-core + FreeCAD) as **settled**. The feature recognition model choice (UV-Net/BRepNet/AAGNet/BrepMFR) remains open and will likely be the main technical discussion with HP going forward.
+**Naming discrepancy (unresolved):** the school's separate AI Lab server guide describes our team's (CleanCAD) confirmed approach as "OCCT (via **cadquery**)" — a different library than the mentor's own "FreeCAD-python API". Our independent research in §2 recommended **pythonocc-core**, a third name. All three are OCCT-based, but they are different codebases with different APIs — this is not just a naming detail. **This must be confirmed directly with the mentor before implementation starts** (tracked as a question in the next meeting).
+
+This confirms the overall **OCCT-based approach** (no NX) as settled. The **exact library binding is not settled** — treat any code written against pythonocc-core, cadquery, or the FreeCAD API as provisional until the mentor confirms. The feature recognition model choice (UV-Net/BRepNet/AAGNet/BrepMFR) also remains open.
 
 ## References
 - [Top Open Source CAD APIs and Libraries for Developers in 2026](https://blog.fileformat.com/cad/top-open-source-cad-api-and-libraries-for-developers-in-2026)

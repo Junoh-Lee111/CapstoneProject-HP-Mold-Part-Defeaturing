@@ -39,8 +39,8 @@ This project builds an AI system that automatically recognizes these shape featu
 | Company Partner | HP Printing Korea |
 | Mentor | Byoungho Yoo (CAE) |
 | Team Lead | Junoh Lee |
-| Member | Vangala Hemanth Reddy |
-| Member | Tahir Aneela |
+| Member | Hemanth Reddy Vangala |
+| Member | Aneela Tahir |
 | Member | Balcha Kidus Elias |
 
 Detailed role assignment (in progress): [docs/team_rnr.md](docs/team_rnr.md)
@@ -49,7 +49,7 @@ Detailed role assignment (in progress): [docs/team_rnr.md](docs/team_rnr.md)
 
 | Layer | Choice | Status |
 |---|---|---|
-| STEP I/O & geometry manipulation | pythonocc-core (OCCT) | **Confirmed** (validated by HP mentor) |
+| STEP I/O & geometry manipulation | OCCT-based (exact binding TBD: FreeCAD-python API vs. cadquery) | Approach confirmed (no NX); exact library open |
 | Simplification quality validation | FreeCAD (visual check), Gmsh (mesh quality) | **Confirmed** |
 | B-rep → graph conversion (for ML) | occwl | Proposed |
 | Feature recognition model (candidates) | UV-Net / BRepNet / AAGNet / BrepMFR | Open — pending decision |
