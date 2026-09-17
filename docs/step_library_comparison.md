@@ -71,16 +71,17 @@ Rather than building from scratch, it's recommended to reference/transfer-learn 
 ## 6. Overall Conclusion (tech stack)
 
 ```
-STEP I/O + geometry manipulation   →  OCCT-based, exact binding TBD (candidates: FreeCAD-python API, cadquery; our own research favors pythonocc-core but that hasn't been put to the mentor)   [approach confirmed, binding open]
+STEP I/O + geometry manipulation   →  FreeCAD (Python API, headless/standalone) — CONFIRMED 2026-09-18, see §9
+                                       cadquery — optional, STEP-generation only
 Before/after validation            →  Gmsh (mesh quality) + FreeCAD (visual check)   [CONFIRMED]
-B-rep → graph conversion           →  occwl                     [proposed]
-Feature recognition model          →  AAGNet or a custom model based on UV-Net (pretrain on MFCAD/MFCAD++/Fusion 360 Gallery + self-authored shapes; no HP data)   [open — see §8]
+B-rep → graph conversion           →  occwl or a FreeCAD-API-based equivalent      [needs re-check, see §7]
+Feature recognition model          →  AAGNet or a custom model based on UV-Net (pretrain on MFCAD/MFCAD++/Fusion 360 Gallery + self-authored shapes; no HP data) — team's own choice, no mentor preference   [open, must run on CPU at inference time — see §9]
 ```
 
 ## 7. Open Questions
-- [ ] **Confirm the exact CAD toolchain with the mentor.** HP's own meeting slide said "FreeCAD-python API"; the school's AI Lab server guide said "cadquery". Neither matches our own pythonocc-core recommendation — ask directly which one they mean before building on any of them.
-- [ ] Once confirmed, check compatibility with occwl (occwl is built on pythonocc-core specifically, so if the mentor's answer is cadquery or FreeCAD-python API instead, occwl may need to be swapped or reimplemented)
-- [ ] Prototype a loading pipeline using Fusion 360 Gallery STEP data with whichever toolchain is confirmed
+- [x] ~~Confirm the exact CAD toolchain with the mentor~~ — **RESOLVED 2026-09-18, see §9**
+- [ ] Check occwl's compatibility with the confirmed toolchain (occwl is built on pythonocc-core specifically — since the mentor's answer is FreeCAD-python API, occwl may need to be swapped for a hand-written B-rep traversal via FreeCAD's own API, or run pythonocc-core in parallel just for the graph-conversion step)
+- [ ] Prototype a loading pipeline using Fusion 360 Gallery STEP data with the confirmed FreeCAD-python API toolchain
 
 ## 8. HP Validation (2026-09)
 
@@ -92,9 +93,44 @@ HP mentor Byoungho Yoo reviewed the CAD license constraint (the team has no acce
 - He flagged the same next challenge this document identifies in §4: deciding **which features to select for defeaturing**, which he also expects will need AI-based training to identify automatically.
 - HP's real CAD data is confidential and **will not be provided**. Instead, HP suggested the team create simple shapes itself for the defeaturing pipeline (see §5).
 
-**Naming discrepancy (unresolved):** the school's separate AI Lab server guide describes our team's (CleanCAD) confirmed approach as "OCCT (via **cadquery**)" — a different library than the mentor's own "FreeCAD-python API". Our independent research in §2 recommended **pythonocc-core**, a third name. All three are OCCT-based, but they are different codebases with different APIs — this is not just a naming detail. **This must be confirmed directly with the mentor before implementation starts** (tracked as a question in the next meeting).
+**Naming discrepancy — RESOLVED.** The school's AI Lab server guide had described our approach as "OCCT (via cadquery)", differing from the mentor's own "FreeCAD-python API", and our own §2 research had recommended a third option (pythonocc-core). We asked directly; see §9 for the mentor's answer.
 
-This confirms the overall **OCCT-based approach** (no NX) as settled. The **exact library binding is not settled** — treat any code written against pythonocc-core, cadquery, or the FreeCAD API as provisional until the mentor confirms. The feature recognition model choice (UV-Net/BRepNet/AAGNet/BrepMFR) also remains open.
+## 9. Toolchain & Process Confirmation (2026-09-18 meeting)
+
+Follow-up mentor meeting resolved the remaining open items:
+
+**Toolchain (resolved):**
+- **FreeCAD is the preferred final platform** — specifically its Python API, run headless as **standalone batch/automated code**, not as manual scripting inside the FreeCAD GUI app.
+- **cadquery may optionally be used, but only for generating STEP files** — not as the main geometry-processing engine.
+- This settles the pythonocc-core vs. cadquery vs. FreeCAD-python API question from §8: **FreeCAD Python API wins**; pythonocc-core (our own earlier recommendation) is not the confirmed path.
+- Follow-up: occwl is built specifically on pythonocc-core, so it needs to be re-evaluated — either replace it with a hand-written B-rep-to-graph conversion using FreeCAD's own API, or call pythonocc-core in parallel just for that one step (see §7).
+
+**Deployment environment (resolved):**
+- Geometry processing (inference/runtime) **must run on a normal office laptop without a GPU**.
+- Model **training** may use a GPU-equipped server (e.g., our AI Lab RTX 5090 server).
+- This directly constrains the feature recognition model choice: it must be light enough for CPU inference.
+
+**Success criteria (resolved):**
+- **Defeaturing accuracy is the top priority.**
+- **Analysis accuracy (stress/deformation error) is explicitly NOT measured — out of scope for this project.**
+
+**Decision Logic — staged approach (resolved):**
+1. Stage 1: rule-based selection (by size)
+2. Stage 2: ML-based selection
+3. Stage 3: cases the pipeline fails on are corrected manually and fed back into the training set for Stage 2 (a retraining loop, not a one-time dataset)
+
+**Geometry-healing failure handling (resolved):**
+- Failure rate cannot be specified in advance.
+- On failure, store the geometry and the ID of the failed face for later use — it gets manually corrected and treated as a special training input (ties into the Stage 3 retraining loop above).
+
+**Self-authored test shape guidance (resolved):**
+- Typical mold part: **2-3mm thick**, **~100-200 (mm) in width**.
+- Representative shape types to include: (1) slightly curved shapes with a cut-out (press-formed), (2) ribbed parts, (3) parts with features near an edge.
+
+**Feature recognition model (resolved — no mentor preference):**
+- The mentor has no preference among UV-Net/BRepNet/AAGNet/BrepMFR — **the team decides on its own**.
+- Feature type recognition quality needs to be evaluated (ties into NFR-ACC-01).
+- Must be able to run on a CPU laptop (see deployment environment above).
 
 ## References
 - [Top Open Source CAD APIs and Libraries for Developers in 2026](https://blog.fileformat.com/cad/top-open-source-cad-api-and-libraries-for-developers-in-2026)

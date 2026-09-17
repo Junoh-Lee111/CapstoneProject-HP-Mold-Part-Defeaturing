@@ -8,9 +8,10 @@ Before running CAE (Computer-Aided Engineering) simulations, mold/part CAD model
 
 This project builds an AI system that automatically recognizes these shape features and removes the ones that are unnecessary for analysis, producing a simplified CAD model ready for CAE simulation.
 
-- **Input**: Mold/Part CAD files (.STEP). NX CAD access is not required — HP confirmed OCCT-based open-source tooling can replace NX for this project.
+- **Input**: Mold/Part CAD files (.STEP). NX CAD access is not required — HP confirmed open-source FreeCAD tooling can replace NX for this project.
 - **Output**: Simplified CAD model suitable for CAE analysis (.STEP)
-- **Core task**: Recognize shape features (hole, fillet, chamfer, rib, boss, emboss) and remove unnecessary ones while minimizing the impact on analysis accuracy
+- **Core task**: Recognize shape features (hole, fillet, chamfer, rib, boss, emboss) and remove unnecessary ones, maximizing defeaturing accuracy (downstream CAE analysis accuracy is out of scope)
+- **Deployment**: geometry-processing inference must run on a GPU-less office laptop; model training may use a GPU server
 
 ### Objectives
 - Automate CAE geometry preprocessing
@@ -49,10 +50,10 @@ Detailed role assignment (in progress): [docs/team_rnr.md](docs/team_rnr.md)
 
 | Layer | Choice | Status |
 |---|---|---|
-| STEP I/O & geometry manipulation | OCCT-based (exact binding TBD: FreeCAD-python API vs. cadquery) | Approach confirmed (no NX); exact library open |
+| STEP I/O & geometry manipulation | FreeCAD Python API, headless/standalone (cadquery optional, STEP-generation only) | **Confirmed** (2026-09-18) |
 | Simplification quality validation | FreeCAD (visual check), Gmsh (mesh quality) | **Confirmed** |
-| B-rep → graph conversion (for ML) | occwl | Proposed |
-| Feature recognition model (candidates) | UV-Net / BRepNet / AAGNet / BrepMFR | Open — pending decision |
+| B-rep → graph conversion (for ML) | occwl or a FreeCAD-API-based equivalent | Needs re-check (occwl is built on pythonocc-core) |
+| Feature recognition model (candidates) | UV-Net / BRepNet / AAGNet / BrepMFR | Team's own choice — no mentor preference; must run on CPU at inference |
 
 See [docs/step_library_comparison.md](docs/step_library_comparison.md) for the full comparison and rationale.
 
