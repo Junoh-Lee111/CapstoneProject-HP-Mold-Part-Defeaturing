@@ -4,38 +4,35 @@
 - Team Name: HP2
 - Company Partner / Mentor: HP Printing Korea / Byoungho Yoo (CAE)
 
-> **Status: draft — the functional role assignment (Function 1–4, non-technical roles) is not yet decided.**
-> Only the Team Lead is confirmed; the rest are left blank to be filled in after team discussion.
+> **Status: revised per professor's R&R Review feedback** (No Sub-Role / Need Coding Role). Sub-roles now split out under Technical Role & Responsibility, each with an explicit coding deliverable, plus a separate Non-technical Role & Responsibility section.
 
-## Team Lead
+## Team Leader
 
 | Item | Value |
 |---|---|
-| Team Lead | Junoh Lee |
+| Team Leader | Junoh Lee |
 
-## Role & Responsibility (technical roles — based on the project pipeline)
+## Technical Role & Responsibility
 
-Split into functional units following the project pipeline (see [docs/step_library_comparison.md](step_library_comparison.md): STEP input → B-rep graph conversion → feature recognition model → validation). Assignees are TBD.
+Sub-roles follow the project pipeline (see [docs/step_library_comparison.md](step_library_comparison.md): STEP input → B-rep graph conversion → feature recognition model → validation). Every sub-role has an explicit code deliverable.
 
-| Category | Role | Assignee |
+| Sub-Role | Responsibility | Assignee |
 |---|---|---|
-| Team Leader | Overall lead (schedule/deliverable management, mentor & professor communication) | Junoh Lee |
-| Function 1 | CAD I/O & geometry manipulation (STEP parsing, feature extraction/removal with pythonocc-core) | |
-| Function 2 | B-rep → graph conversion & feature recognition model (occwl, GNN-based model training) | |
-| Function 3 | Dataset construction & validation (public datasets + self-authored CAD shapes — no HP data, before/after comparison & quality evaluation) | |
-| Function 4 | Documentation & presentations (proposal/HLD/LLD/reports, slides, meeting notes) | |
+| CAD Geometry Engineer | Write the CAD I/O and geometry manipulation code: STEP parsing, feature extraction/removal, geometry healing (pythonocc-core/cadquery) | Junoh Lee |
+| ML / Graph Model Engineer | Write the B-rep -> graph conversion code (occwl) and train the GNN-based feature recognition model | Hemanth Reddy Vangala |
+| Data Pipeline & Test-Data Engineer | Write scripts to programmatically generate test CAD shapes and to automate before/after comparison & mesh-quality evaluation (Gmsh) | Aneela Tahir |
+| Integration & Test Engineer | Write the glue code connecting each module's input/output, plus unit/integration test code for the pipeline | Balcha Kidus Elias |
 
 ## Non-technical Role & Responsibility
 
 | Role | Assignee |
 |---|---|
-| Co-Leader | |
-| Presentation | |
-| Meeting Notes | |
-| Report Writer | |
-| Presentation Maker | |
+| Co-Leader | Hemanth Reddy Vangala |
+| Meeting Notes | Balcha Kidus Elias |
+| Report Writer | Junoh Lee |
+| Presentation Maker | Aneela Tahir |
 
-## Collaboration Principles (draft)
+## Collaboration Principles
 
 1. Share progress in a weekly team meeting during class time (use the Weekly Report template)
 2. Track task requests and progress via KakaoTalk / GitHub issues
