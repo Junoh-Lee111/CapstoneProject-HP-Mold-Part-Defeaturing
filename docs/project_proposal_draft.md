@@ -2,6 +2,11 @@
 
 > 2026 Capstone Design · Week 2 (9/10) deliverable
 > Company Partner: HP Printing Korea | Mentor: Byoungho Yoo (CAE) | Supervising Professor: Edward Youngil Kim
+>
+> **Note:** this is the original Week 2 planning draft. The document actually submitted for the Week 4
+> (10/1) proposal presentation is [docs/Project_Proposal.pptx](Project_Proposal.pptx), which reflects
+> everything confirmed with the mentor since this draft was written. This file is kept for history and
+> has been updated below only to remove factually stale statements (NX priority, R&R "TBD").
 
 ## 1. Project Overview
 
@@ -23,7 +28,7 @@ Before running CAE (Computer-Aided Engineering) analysis, real product CAD desig
 
 ## 4. Scope (MVP)
 
-- **Input**: Mold/Part CAD files (.STEP priority 1, NX priority 2)
+- **Input**: Mold/Part CAD files (.STEP only — NX is not required, confirmed by HP mentor)
 - **Output**:
   - Simulation-ready simplified CAD model (.STEP)
   - Original vs. simplified shape comparison report
@@ -38,7 +43,7 @@ Before running CAE (Computer-Aided Engineering) analysis, real product CAD desig
 
 - Shape feature recognition (hole, fillet, chamfer, rib, boss)
 - 3D shape classification / ML & deep learning (e.g., point cloud, mesh, B-rep-based models)
-- CAD file format (STEP) parsing and manipulation (e.g., OpenCASCADE, python-occ)
+- CAD file format (STEP) parsing and manipulation (FreeCAD Python API, headless — confirmed toolchain)
 - Defining defeaturing rules and building training data
 
 ## 6. Expected Value
@@ -47,14 +52,16 @@ Before running CAE (Computer-Aided Engineering) analysis, real product CAD desig
 - Foundation for high-volume simulation automation
 - Improved simulation efficiency for HP Printing product development
 
-## 7. Team & R&R (draft — pending discussion)
+## 7. Team & R&R
 
-| Name | Role |
+Finalized — see [docs/team_rnr.md](team_rnr.md) for the current sub-role breakdown.
+
+| Name | Sub-Role |
 |---|---|
-| Junoh Lee | TBD |
-| Vangala Hemanth Reddy | TBD |
-| Tahir Aneela | TBD |
-| Balcha Kidus Elias | TBD |
+| Junoh Lee | Team Lead / CAD Geometry Engineer |
+| Hemanth Reddy Vangala | ML / Graph Model Engineer |
+| Aneela Tahir | Data Pipeline & Test-Data Engineer |
+| Balcha Kidus Elias | Integration & Test Engineer |
 
 ## 8. Timeline
 
@@ -69,9 +76,10 @@ Before running CAE (Computer-Aided Engineering) analysis, real product CAD desig
 
 ## 9. Open Items / Next Actions
 
-- [x] Select STEP processing library → see [docs/step_library_comparison.md](step_library_comparison.md) (pythonocc-core + FreeCAD **confirmed by HP mentor**, 2026-09; occwl proposed)
-- [x] NX CAD license constraint → resolved: HP mentor confirmed NX is not required, OCCT-based tooling is sufficient
-- [x] Confirm how to obtain sample CAD data from HP → resolved: HP's real CAD data is confidential and will not be provided; the team will author simple CAD shapes itself, supplemented by public datasets
-- [ ] Investigate 3D deep learning approaches for feature recognition (mesh-based vs. B-rep graph-based)
-- [ ] Finalize per-member R&R
-- [ ] Write team ground rules
+- [x] Select STEP processing library → see [docs/step_library_comparison.md](step_library_comparison.md) §9 (**FreeCAD Python API confirmed by HP mentor**, 2026-09-18; cadquery optional for STEP generation only)
+- [x] NX CAD license constraint → resolved: HP mentor confirmed NX is not required
+- [x] Confirm how to obtain sample CAD data from HP → resolved: HP's real CAD data is confidential and will not be provided; the team authors simple CAD shapes itself, supplemented by public datasets
+- [x] Finalize per-member R&R → see [docs/team_rnr.md](team_rnr.md)
+- [x] Write team ground rules → see [docs/Team2_Ground_Rules.docx](Team2_Ground_Rules.docx)
+- [x] Core mechanism prototype → `src/cleancad_core.py`, verified against 9 self-authored example shapes (9/9 pass, `src/run_headless.py`)
+- [ ] Investigate 3D deep learning approaches for feature recognition (mesh-based vs. B-rep graph-based); pick the specific model (UV-Net/BRepNet/AAGNet/BrepMFR)

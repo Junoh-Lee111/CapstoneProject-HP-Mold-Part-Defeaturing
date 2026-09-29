@@ -18,8 +18,8 @@ Sub-roles follow the project pipeline (see [docs/step_library_comparison.md](ste
 
 | Sub-Role | Responsibility | Assignee |
 |---|---|---|
-| CAD Geometry Engineer | Write the CAD I/O and geometry manipulation code: STEP parsing, feature extraction/removal, geometry healing (pythonocc-core/cadquery) | Junoh Lee |
-| ML / Graph Model Engineer | Write the B-rep -> graph conversion code (occwl) and train the GNN-based feature recognition model | Hemanth Reddy Vangala |
+| CAD Geometry Engineer | Write the CAD I/O and geometry manipulation code: STEP parsing, feature extraction/removal, geometry healing (FreeCAD Python API, headless; cadquery optional for STEP generation). Mechanism prototyped in `src/cleancad_core.py`, verified against 9 example shapes (9/9 pass, see `src/run_headless.py`) | Junoh Lee |
+| ML / Graph Model Engineer | Write the B-rep -> graph conversion code (in-house via FreeCAD API — occwl needs re-evaluation, since it is built on pythonocc-core) and train the GNN-based feature recognition model | Hemanth Reddy Vangala |
 | Data Pipeline & Test-Data Engineer | Write scripts to programmatically generate test CAD shapes and to automate before/after comparison & mesh-quality evaluation (Gmsh) | Aneela Tahir |
 | Integration & Test Engineer | Write the glue code connecting each module's input/output, plus unit/integration test code for the pipeline | Balcha Kidus Elias |
 
