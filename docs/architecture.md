@@ -100,6 +100,13 @@ flowchart LR
 - [ ] Re-evaluate occwl now that the confirmed toolchain is FreeCAD-python API rather than pythonocc-core (see step_library_comparison.md §7)
 - [ ] Whether a web demo/UI is needed and in what form (currently assuming a batch/CLI pipeline only)
 
+**HP mentor feedback on the proposal (relayed 2026-10-02) — recorded as Want candidates, unverified, team decision pending** (see FRD v1.8 / NFRD v1.7 / HLD v1.4):
+- [ ] Split defeaturing accuracy into *feature selection accuracy* and *removal execution accuracy*; track "correctly selected but removal/healing failed" as its own failure category (FR-VAL-07, FR-DEF-05, NFR-ACC-03)
+- [ ] Define explicit dimension thresholds for Stage 1 rules (hole diameter, chamfer size, fillet radius) as explainable decision logic (FR-FEAT-07)
+- [ ] Expand the validation dataset beyond the 9 self-authored shapes: more diversity, feature combinations, edge cases, sizes/locations, intentional healing/removal failures (FR-DATA-04)
+- [ ] Add logos (characters, surface markings, embossed/engraved text) as a feature category — scope vs. HP's initially named shape types undecided (FR-FEAT-08)
+- [ ] Supervisory decision layer to resolve rule-vs-ML conflicts in M4 (FR-FEAT-09)
+
 ## Related Documents
 - [STEP Library Comparison](step_library_comparison.md)
 - [Team R&R](team_rnr.md)
