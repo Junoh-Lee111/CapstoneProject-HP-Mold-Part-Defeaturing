@@ -1,7 +1,7 @@
 # Team R&R (Role & Responsibility)
 
 - Project Name: Mold-Part Defeaturing
-- Team Name: HP2
+- Team Name: CleanCAD
 - Company Partner / Mentor: HP Printing Korea / Byoungho Yoo (CAE)
 
 > **Status: revised per professor's R&R Review feedback** (No Sub-Role / Need Coding Role). Sub-roles now split out under Technical Role & Responsibility, each with an explicit coding deliverable, plus a separate Non-technical Role & Responsibility section.
