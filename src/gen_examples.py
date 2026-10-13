@@ -16,17 +16,92 @@ WORKDIR = os.environ.get("CLEANCAD_WORKDIR", os.path.expanduser("~/Documents/Cle
 OUT = os.path.join(WORKDIR, "samples", "examples")
 os.makedirs(OUT, exist_ok=True)
 
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cleancad_core import sig  # noqa: E402
+
 MANIFEST = []
+TOL = 1e-6
 
 
-def save(name, shape, rules, expected_faces, expected_volume, note, expect_failure=False):
+# ---- face-level ground truth -------------------------------------------------------------------
+# A face of the generated shape is ground truth "to be removed" when it does not belong to the
+# clean base shape (the shape expected after defeaturing): it must NOT lie on a base surface
+# within that base face's extent. Each truth face also gets a feature type from `kinds`.
+def _stype(f):
+    return type(f.Surface).__name__
+
+
+def cyl(f):
+    return _stype(f) == "Cylinder"
+
+
+def cone(f):
+    return _stype(f) == "Cone"
+
+
+def full(f):
+    u0, u1, _, _ = f.ParameterRange
+    return cyl(f) and u1 - u0 >= 2 * math.pi - 1e-6
+
+
+def radius(f):
+    return f.Surface.Radius if cyl(f) else None
+
+
+def _coincident(a, b):
+    ta, tb = _stype(a), _stype(b)
+    if ta != tb:
+        return False
+    sa, sb = a.Surface, b.Surface
+    if ta == "Plane":
+        return (abs(sa.Axis.dot(sb.Axis)) > 1 - 1e-9
+                and abs((sb.Position - sa.Position).dot(sa.Axis)) < TOL)
+    if ta == "Cylinder":
+        return (abs(sa.Radius - sb.Radius) < TOL and sa.Axis.cross(sb.Axis).Length < 1e-9
+                and (sb.Center - sa.Center).cross(sa.Axis).Length < TOL)
+    return False
+
+
+def _within(a, b):
+    p, q = a.BoundBox, b.BoundBox
+    return (p.XMin >= q.XMin - TOL and p.XMax <= q.XMax + TOL and p.YMin >= q.YMin - TOL
+            and p.YMax <= q.YMax + TOL and p.ZMin >= q.ZMin - TOL and p.ZMax <= q.ZMax + TOL)
+
+
+def on_base(face, base_faces):
+    return any(_coincident(face, b) and _within(face, b) for b in base_faces)
+
+
+def save(name, shape, rules, expected_faces, expected_volume, note, expect_failure=False,
+         base=None, kinds=()):
+    """base: the clean shape expected after defeaturing (ground truth = faces not on it);
+    kinds: ordered [(feature_type, predicate(face))]; first match names a truth face's type."""
     path = os.path.join(OUT, f"{name}.step")
     shape.exportStep(path)
-    MANIFEST.append(dict(
+    entry = dict(
         name=name, file=path, rules=rules,
         expected_faces=expected_faces, expected_volume=round(expected_volume, 3),
         expect_failure=expect_failure, note=note,
-    ))
+    )
+    if base is not None:
+        # re-read so the signatures match what the evaluation sees (STEP round trip)
+        loaded = Part.read(path)
+        base_faces = list(base.Faces)
+        truth = []
+        for f in loaded.Faces:
+            if on_base(f, base_faces):
+                continue
+            ftype = next((t for t, pred in kinds if pred(f)), "other")
+            truth.append({"sig": list(sig(f)), "type": ftype})
+        truth_path = os.path.join(OUT, f"{name}.truth.json")
+        json.dump({"case": name, "faces_total": len(loaded.Faces), "base_faces": len(base_faces),
+                   "remove": truth}, open(truth_path, "w"), indent=1)
+        entry["truth"] = truth_path
+        print(f"GEN {name}: truth {len(truth)} of {len(loaded.Faces)} faces "
+              f"(base has {len(base_faces)})")
+    MANIFEST.append(entry)
     print(f"GEN {name}: faces={len(shape.Faces)} valid={shape.isValid()} volume={shape.Volume:.3f}")
 
 
@@ -45,10 +120,11 @@ def gen_plate_hole_fillets():
                  and e.Curve.__class__.__name__ != "Circle"]
     plate = plate.makeFillet(1.0, top_edges)
     save("plate_hole_fillets", plate, ["cyl"], 6, PLATE_VOL,
-         "through hole + edge fillets -> plain plate")
+         "through hole + edge fillets -> plain plate",
+         base=flat_plate(), kinds=[("hole", full), ("fillet", cyl)])
 
 
-def gen_curved_press():
+def curved_press(detailed):
     R_in, t, H, arc = 300.0, 2.5, 150.0, 120.0
     ang = math.degrees(arc / R_in)
     th = math.radians(ang / 2)
@@ -62,18 +138,25 @@ def gen_curved_press():
         return shape
 
     window = Part.makeBox(30, 30, 20, Vector(R_in - 10, -15, 0))
-    x_edges = [e for e in window.Edges if abs(e.Vertexes[0].Point.y - e.Vertexes[1].Point.y) < 1e-6
-               and abs(e.Vertexes[0].Point.z - e.Vertexes[1].Point.z) < 1e-6]
-    window = window.makeFillet(3.0, x_edges)
+    if detailed:
+        x_edges = [e for e in window.Edges if abs(e.Vertexes[0].Point.y - e.Vertexes[1].Point.y) < 1e-6
+                   and abs(e.Vertexes[0].Point.z - e.Vertexes[1].Point.z) < 1e-6]
+        window = window.makeFillet(3.0, x_edges)
     sheet = sheet.cut(radial(window, 60))
-    for y, z in ((-25, 25), (25, 125)):
-        hole = Part.makeCylinder(2, 30, Vector(R_in - 10, y, 0), Vector(1, 0, 0))
-        sheet = sheet.cut(radial(hole, z))
-    sheet = sheet.removeSplitter()
+    if detailed:
+        for y, z in ((-25, 25), (25, 125)):
+            hole = Part.makeCylinder(2, 30, Vector(R_in - 10, y, 0), Vector(1, 0, 0))
+            sheet = sheet.cut(radial(hole, z))
+    return sheet.removeSplitter()
+
+
+def gen_curved_press():
+    sheet = curved_press(True)
     # Expected volume is AFTER defeaturing (2 corner fillets + 4 hole faces removed and healed),
     # not sheet.Volume above (which is the shape as generated, before removal).
     save("curved_press", sheet, ["cyl"], 10, 43686.879,
-         "curved sheet R300 t2.5, cut-out with R3 corners + 2 holes -> healed curved sheet")
+         "curved sheet R300 t2.5, cut-out with R3 corners + 2 holes -> healed curved sheet",
+         base=curved_press(False), kinds=[("hole", full), ("fillet", cyl)])
 
 
 def gen_ribbed():
@@ -87,7 +170,8 @@ def gen_ribbed():
             and abs(e.BoundBox.XLength - 110) < 1e-6 and 24 < e.BoundBox.YMin < 26.5]
     shape = shape.makeFillet(0.5, root)
     save("ribbed", shape, ["prot"], 6, 150 * 100 * t,
-         "3 separate ribs (one with root fillets) -> plain plate")
+         "3 separate ribs (one with root fillets) -> plain plate",
+         base=plate, kinds=[("fillet", cyl), ("rib", lambda f: True)])
 
 
 def gen_chamfer():
@@ -96,15 +180,19 @@ def gen_chamfer():
     plate = plate.makeChamfer(1.0, top_edges)
     plate = plate.cut(Part.makeCylinder(3, 10, Vector(50, 30, -2)))
     plate = plate.cut(Part.makeCone(3, 4.2, 1.2, Vector(50, 30, 1.8))).removeSplitter()
+    base = flat_plate().cut(Part.makeCylinder(3, 10, Vector(50, 30, -2)))
     save("chamfer", plate, ["chamfer"], 7, PLATE_VOL - math.pi * 9 * 3,
-         "perimeter chamfer + countersink -> plate with a plain hole")
+         "perimeter chamfer + countersink -> plate with a plain hole",
+         base=base, kinds=[("countersink", cone), ("chamfer", lambda f: True)])
 
 
 def gen_boss():
     plate = flat_plate().fuse(Part.makeCylinder(7, 6, Vector(50, 30, 3))).removeSplitter()
     plate = plate.cut(Part.makeCylinder(2.5, 20, Vector(50, 30, -5)))
+    base = flat_plate().cut(Part.makeCylinder(2.5, 20, Vector(50, 30, -5)))
     save("boss", plate, ["prot"], 7, PLATE_VOL - math.pi * 6.25 * 3,
-         "boss removed, screw hole through the plate stays")
+         "boss removed, screw hole through the plate stays",
+         base=base, kinds=[("boss", lambda f: True)])
 
 
 def gen_emboss():
@@ -115,7 +203,8 @@ def gen_emboss():
         plate = plate.fuse(p)
     plate = plate.cut(Part.makeBox(20, 3, 0.4, Vector(60, 42, 2.6))).removeSplitter()
     save("emboss", plate, ["prot", "recess"], 6, PLATE_VOL,
-         "raised + engraved emboss -> plain plate")
+         "raised + engraved emboss -> plain plate",
+         base=flat_plate(), kinds=[("emboss", lambda f: True)])
 
 
 def gen_rib_network():
@@ -130,7 +219,8 @@ def gen_rib_network():
         shape = shape.fuse(r)
     shape = shape.removeSplitter()
     save("rib_network", shape, ["prot"], 6, 120 * 80 * 2.5,
-         "crossing ribs form one connected feature -> plain plate")
+         "crossing ribs form one connected feature -> plain plate",
+         base=Part.makeBox(120, 80, 2.5), kinds=[("rib", lambda f: True)])
 
 
 def gen_near_edge():
@@ -142,14 +232,17 @@ def gen_near_edge():
     plate = plate.cut(Part.makeCylinder(4, 10, Vector(100, 15, -2)))
     plate = plate.fuse(Part.makeBox(1.5, 26, 6, Vector(95.5, 24, 3))).removeSplitter()
     save("near_edge", plate, ["cyl", "prot"], 6, PLATE_VOL,
-         "hole 1mm from an edge, an edge-opening notch, a corner fillet, and a rib near an edge -> plain plate")
+         "hole 1mm from an edge, an edge-opening notch, a corner fillet, and a rib near an edge -> plain plate",
+         base=flat_plate(),
+         kinds=[("hole", full), ("notch", lambda f: cyl(f) and abs(radius(f) - 4) < 1e-6),
+                ("fillet", cyl), ("rib", lambda f: True)])
 
 
 def gen_fail_demo():
     plate = flat_plate().cut(Part.makeCylinder(4, 10, Vector(50, 30, -2)))
     save("fail_demo", plate, ["fail_demo"], 7, PLATE_VOL - math.pi * 16 * 3,
          "targets an un-removable face on purpose: must be detected, stored, and left unchanged",
-         expect_failure=True)
+         expect_failure=True, base=plate)
 
 
 def main():

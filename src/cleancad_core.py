@@ -11,13 +11,47 @@ should be removed.
 """
 import Part
 
+import os
+
 MAX_SMALL_RADIUS = 5.0
 RULES = {}
+SET_RULES = {}   # name -> fn(shape) -> list of faces (rules that need the whole shape, e.g. hole groups)
+BATCH = {}       # name -> "try" | "only": remove ALL faces the rule selects in one operation
+#                  ("try": fall back to per-feature removal on failure; "only": all-or-nothing)
+
+# Size thresholds are configuration (the mentor: "should not be treated as a universal rule").
+PROFILES = {
+    # example parameters of the HP-supplied script (hard_7); NOT general criteria
+    "hp_example": {"hole_diameter": 6.0, "fillet_radius": 10.0},
+    # HP: when fastener holes must be kept, remove only holes of 2 mm or less (fasteners are ~2.7 mm).
+    # fillet value is the earlier mentor starting value, still to be confirmed.
+    # recognition-only evaluation: size limits so wide that no real feature is filtered out by size
+    "recognition_only": {"hole_diameter": 50.0, "fillet_radius": 50.0},
+    "keep_fasteners": {"hole_diameter": 2.0 + 1e-6, "fillet_radius": 5.0},
+}
+PROFILE = dict(PROFILES[os.environ.get("CLEANCAD_PROFILE", "hp_example")])
+
+
+def set_profile(name):
+    PROFILE.clear()
+    PROFILE.update(PROFILES[name])
 
 
 def rule(name):
     def deco(fn):
         RULES[name] = fn
+        return fn
+    return deco
+
+
+def set_rule(name, batch=None):
+    """Register a rule that selects faces by looking at the whole shape. It is exposed in RULES as
+    a per-face predicate too (membership in the selection), so select()/the demo need no changes."""
+    def deco(fn):
+        SET_RULES[name] = fn
+        if batch:
+            BATCH[name] = batch
+        RULES[name] = lambda f, c: sig(f) in c.picked(name)
         return fn
     return deco
 
@@ -38,9 +72,17 @@ class Ctx:
     """Shared per-shape context available to rule functions (e.g. the base plate's top Z)."""
 
     def __init__(self, shape):
+        self.shape = shape
+        self._picked = {}
         ups = [f for f in shape.Faces if type(f.Surface).__name__ == "Plane"
                and (normal(f) is not None and normal(f).z > 0.99)]
         self.base_z = max(ups, key=lambda f: f.Area).CenterOfMass.z if ups else 0.0
+
+    def picked(self, name):
+        """Face signatures selected by a SET rule (computed once per Ctx)."""
+        if name not in self._picked:
+            self._picked[name] = {sig(f) for f in SET_RULES[name](self.shape)}
+        return self._picked[name]
 
 
 # ---------------- test-scaffolding rules (NOT the project's real decision criteria) ----------------
@@ -132,6 +174,18 @@ def remove_group(shape, group):
     return True, new_shape, "ok"
 
 
+def _stages(rule_names):
+    """Face-level rules form one stage (their faces are grouped together); every SET rule is its
+    own stage, evaluated in the order listed and only after the earlier stages have nothing left."""
+    face = [r for r in rule_names if r not in SET_RULES]
+    return ([face] if face else []) + [[r] for r in rule_names if r in SET_RULES]
+
+
+def _gone(shape, faces):
+    cur = list(shape.Faces)
+    return [not any(f.isSame(c) for c in cur) for f in faces]
+
+
 def process(shape, rule_names):
     """Headless end-to-end: repeatedly remove feature groups until none remain.
 
@@ -139,24 +193,55 @@ def process(shape, rule_names):
     face signatures so it can be stored for manual correction and fed back into
     Stage 2 retraining (per FR-DEF-04 / NFR-REL-02).
     """
-    failed_sigs, removed, failures = set(), [], []
+    failed_sigs, removed, failures, batch_dead = set(), [], [], set()
+    stages = _stages(rule_names)
     current = shape
+
+    def info_for(group):
+        return {"faces": len(group),
+                "types": sorted({type(f.Surface).__name__ for f in group}),
+                "sigs": [sig(f) for f in group]}
+
     while True:
-        candidate_groups = groups(current, select(current, rule_names, failed_sigs))
-        if not candidate_groups:
+        progressed = False
+        for stage in stages:
+            selected = select(current, stage, failed_sigs)
+            if not selected:
+                continue
+            name = stage[0]
+            if name in BATCH and name not in batch_dead:
+                ok, new_shape, why = remove_group(current, selected)
+                if ok:
+                    gone = _gone(new_shape, selected)
+                    if not any(gone) or (BATCH[name] == "only" and not all(gone)):
+                        ok, why = False, "requested faces not (fully) removed"
+                if ok:
+                    removed.append(info_for(selected))
+                    current, progressed = new_shape, True
+                    break
+                if BATCH[name] == "only":
+                    info = info_for(selected)
+                    info["reason"] = why
+                    failures.append(info)
+                    failed_sigs.update(info["sigs"])
+                    progressed = True
+                    break
+                batch_dead.add(name)   # "try": fall back to per-feature removal below
+            group = groups(current, selected)[0]
+            ok, new_shape, why = remove_group(current, group)
+            info = info_for(group)
+            if ok:
+                removed.append(info)
+                current = new_shape
+            else:
+                info["reason"] = why
+                failures.append(info)
+                failed_sigs.update(info["sigs"])
+            progressed = True
             break
-        group = candidate_groups[0]
-        ok, new_shape, why = remove_group(current, group)
-        info = {
-            "faces": len(group),
-            "types": sorted({type(f.Surface).__name__ for f in group}),
-            "sigs": [sig(f) for f in group],
-        }
-        if ok:
-            removed.append(info)
-            current = new_shape
-        else:
-            info["reason"] = why
-            failures.append(info)
-            failed_sigs.update(sig(f) for f in group)
+        if not progressed:
+            break
     return current, removed, failures
+
+
+import ref_rules  # noqa: E402,F401  (registers ref_holes / ref_fillets / ref_protrusions)
