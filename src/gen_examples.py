@@ -91,7 +91,7 @@ def save(name, shape, rules, expected_faces, expected_volume, note, expect_failu
         base_faces = list(base.Faces)
         truth = []
         for f in loaded.Faces:
-            if on_base(f, base_faces):
+            if base is shape or on_base(f, base_faces):     # base is shape: nothing is to be removed
                 continue
             ftype = next((t for t, pred in kinds if pred(f)), "other")
             truth.append({"sig": list(sig(f)), "type": ftype})
@@ -245,9 +245,69 @@ def gen_fail_demo():
          expect_failure=True, base=plate)
 
 
+FONT_DIR, FONT_FILE = "/System/Library/Fonts/Supplemental", "Arial Bold.ttf"
+
+
+def text_prism(text, height, z0, z1, x0=20.0, y0=22.0):
+    """Solid letters (with their counters) between z0 and z1, or None when the font is not available."""
+    if not os.path.exists(os.path.join(FONT_DIR, FONT_FILE)):
+        return None
+    glyphs = Part.makeWireString(text, FONT_DIR + "/", FONT_FILE, height, 0)
+    solids = []
+    for wires in glyphs:
+        if not wires:                      # a space has no outline
+            continue
+        face = Part.makeFace(wires, "Part::FaceMakerBullseye")
+        solids.append(face.extrude(Vector(0, 0, z1 - z0)))
+    shape = solids[0]
+    for s in solids[1:]:
+        shape = shape.fuse(s)
+    shape.translate(Vector(x0, y0, z0))
+    return shape
+
+
+def gen_logo_engrave():
+    text = text_prism("X01 ABS", 8, 2.7, 3.2)
+    if text is None:
+        print("GEN logo_engrave skipped: no font")
+        return
+    plate = flat_plate().cut(text).removeSplitter()
+    save("logo_engrave", plate, ["logo"], 6, PLATE_VOL, "text engraved 0.3 mm deep -> plain plate",
+         base=flat_plate(), kinds=[("logo", lambda f: True)])
+
+
+def gen_logo_emboss():
+    text = text_prism("X01 ABS", 8, 3.0, 3.3)
+    if text is None:
+        print("GEN logo_emboss skipped: no font")
+        return
+    plate = flat_plate().fuse(text).removeSplitter()
+    save("logo_emboss", plate, ["logo"], 6, PLATE_VOL, "text raised 0.3 mm -> plain plate",
+         base=flat_plate(), kinds=[("logo", lambda f: True)])
+
+
+def gen_logo_through_text():
+    text = text_prism("X01 ABS", 8, -1.0, 4.0)
+    if text is None:
+        print("GEN logo_through_text skipped: no font")
+        return
+    plate = flat_plate().cut(text).removeSplitter()
+    # stencil-like letters cut through the plate are a cut-out, not a logo: must stay as they are
+    save("logo_through_text", plate, ["logo"], len(plate.Faces), plate.Volume,
+         "text cut through the plate (not a logo) -> unchanged", base=plate)
+
+
+def gen_pocket():
+    plate = flat_plate().cut(Part.makeBox(20, 12, 1.5, Vector(40, 24, 1.5)))
+    # a blind functional pocket, not a marking: must stay as it is
+    save("pocket", plate, ["logo"], len(plate.Faces), plate.Volume,
+         "blind rectangular pocket 20x12x1.5 (not a logo) -> unchanged", base=plate)
+
+
 def main():
     for gen in (gen_plate_hole_fillets, gen_curved_press, gen_ribbed, gen_chamfer,
-                gen_boss, gen_emboss, gen_rib_network, gen_near_edge, gen_fail_demo):
+                gen_boss, gen_emboss, gen_rib_network, gen_near_edge, gen_fail_demo,
+                gen_logo_engrave, gen_logo_emboss, gen_logo_through_text, gen_pocket):
         gen()
     manifest_path = os.path.join(OUT, "manifest.json")
     json.dump(MANIFEST, open(manifest_path, "w"), indent=1)
