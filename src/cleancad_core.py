@@ -29,12 +29,15 @@ BATCH = {}       # name -> "try" | "only": remove ALL faces the rule selects in 
 # Size thresholds are configuration (the mentor: "should not be treated as a universal rule").
 PROFILES = {
     # example parameters of the HP-supplied script (hard_7); NOT general criteria
-    "hp_example": {"hole_diameter": 6.0, "fillet_radius": 10.0, "logo_max_depth": 0.5},
+    "hp_example": {"hole_diameter": 6.0, "fillet_radius": 10.0, "logo_max_depth": 0.5,
+                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
+    # recognition-only evaluation: size limits so wide that no real feature is filtered out by size
+    "recognition_only": {"hole_diameter": 50.0, "fillet_radius": 50.0, "logo_max_depth": 0.5,
+                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
     # HP: when fastener holes must be kept, remove only holes of 2 mm or less (fasteners are ~2.7 mm).
     # fillet value is the earlier mentor starting value, still to be confirmed.
-    # recognition-only evaluation: size limits so wide that no real feature is filtered out by size
-    "recognition_only": {"hole_diameter": 50.0, "fillet_radius": 50.0, "logo_max_depth": 0.5},
-    "keep_fasteners": {"hole_diameter": 2.0 + 1e-6, "fillet_radius": 5.0, "logo_max_depth": 0.5},
+    "keep_fasteners": {"hole_diameter": 2.0 + 1e-6, "fillet_radius": 5.0, "logo_max_depth": 0.5,
+                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
 }
 PROFILE = dict(PROFILES[os.environ.get("CLEANCAD_PROFILE", "hp_example")])
 
@@ -368,3 +371,4 @@ def process(shape, rule_names):
 
 import ref_rules  # noqa: E402,F401  (registers ref_holes / ref_fillets / ref_protrusions)
 import logo_rules  # noqa: E402,F401  (registers logo)
+import feature_rules  # noqa: E402,F401  (registers rib, boss, chamfer_edge)

@@ -37,6 +37,7 @@ def main():
         ("ref rules, recognition only (size limits 50 mm)", REF, "recognition_only"),
         ("ref rules, hp_example (holes < 6 mm, fillets < 10 mm)", REF, "hp_example"),
         ("logo rule (engraving / emboss), hp_example", ["logo"], "hp_example"),
+        ("rib / boss / chamfer rules, hp_example", ["rib", "boss", "chamfer_edge"], "hp_example"),
     ]
     out = ["# Face-level rule evaluation", "",
            "Truth = faces of the generated shape that are not part of the clean base shape. "
