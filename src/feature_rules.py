@@ -27,7 +27,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cleancad_core as core  # noqa: E402
-from ref_rules import Topo, stype, face_points  # noqa: E402
+from geom_utils import Topo, stype, face_points  # noqa: E402
 from logo_rules import is_circle_wire, plane_frame, box2d  # noqa: E402
 
 MIN_HOST_AREA = 50.0

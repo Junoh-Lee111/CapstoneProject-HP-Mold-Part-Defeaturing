@@ -19,7 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cleancad_core as core  # noqa: E402
-from ref_rules import Topo, stype  # noqa: E402
+from geom_utils import Topo, stype  # noqa: E402
 
 MIN_HOST_AREA = 20.0        # mm2: smaller planar faces are not logo hosts
 MAX_FACE_FRACTION = 0.20    # a bundle face must be smaller than this part of the host area
