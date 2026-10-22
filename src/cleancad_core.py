@@ -9,9 +9,16 @@ Stage 2 ML-based per the confirmed architecture) plugs in the same way - registe
 function with @rule("name") that takes (face, ctx) and returns True if that face
 should be removed.
 """
-import Part
-
+import atexit
+import json
 import os
+import shutil
+import subprocess
+import tempfile
+import time
+
+import FreeCAD
+import Part
 
 MAX_SMALL_RADIUS = 5.0
 RULES = {}
@@ -22,12 +29,15 @@ BATCH = {}       # name -> "try" | "only": remove ALL faces the rule selects in 
 # Size thresholds are configuration (the mentor: "should not be treated as a universal rule").
 PROFILES = {
     # example parameters of the HP-supplied script (hard_7); NOT general criteria
-    "hp_example": {"hole_diameter": 6.0, "fillet_radius": 10.0},
+    "hp_example": {"hole_diameter": 6.0, "fillet_radius": 10.0, "logo_max_depth": 0.5,
+                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
+    # recognition-only evaluation: size limits so wide that no real feature is filtered out by size
+    "recognition_only": {"hole_diameter": 50.0, "fillet_radius": 50.0, "logo_max_depth": 0.5,
+                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
     # HP: when fastener holes must be kept, remove only holes of 2 mm or less (fasteners are ~2.7 mm).
     # fillet value is the earlier mentor starting value, still to be confirmed.
-    # recognition-only evaluation: size limits so wide that no real feature is filtered out by size
-    "recognition_only": {"hole_diameter": 50.0, "fillet_radius": 50.0},
-    "keep_fasteners": {"hole_diameter": 2.0 + 1e-6, "fillet_radius": 5.0},
+    "keep_fasteners": {"hole_diameter": 2.0 + 1e-6, "fillet_radius": 5.0, "logo_max_depth": 0.5,
+                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
 }
 PROFILE = dict(PROFILES[os.environ.get("CLEANCAD_PROFILE", "hp_example")])
 
@@ -155,23 +165,144 @@ def groups(shape, faces):
     return list(out.values())
 
 
-def remove_group(shape, group):
+# FreeCAD's defeaturing() is one blocking C++ call: on some real (free-form) geometry it never
+# returns, and neither a Python thread nor a forked child can interrupt it (OCCT's thread pool does
+# not survive fork). Headless runs therefore send each removal to a separate worker process
+# (src/defeature_worker.py, one long-lived FreeCAD instance) and kill it after DEFEATURE_TIMEOUT
+# seconds. A timeout (or a crash of the worker) is reported as an ordinary failure, so process()
+# skips that feature and carries on. In the GUI the call runs in-process without a limit.
+DEFEATURE_TIMEOUT = float(os.environ.get("CLEANCAD_DEFEATURE_TIMEOUT", "60"))   # seconds; 0 = off
+
+
+class WorkerUnavailable(Exception):
+    pass
+
+
+class _Worker:
+    """One long-lived FreeCAD process that executes defeaturing requests."""
+
+    def __init__(self):
+        self.proc = None
+        self.dir = None
+        self.n = 0
+
+    def _start(self):
+        self.dir = tempfile.mkdtemp(prefix="cleancad_worker_")
+        exe = os.path.join(FreeCAD.getHomePath(), "bin", "freecadcmd")
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "defeature_worker.py")
+        if not (os.path.exists(exe) and os.path.exists(script)):
+            raise WorkerUnavailable("freecadcmd or defeature_worker.py not found")
+        env = dict(os.environ, CLEANCAD_WORKER_DIR=self.dir, CLEANCAD_PARENT_PID=str(os.getpid()))
+        self.proc = subprocess.Popen([exe, script], env=env, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        deadline = time.time() + 120
+        while not os.path.exists(os.path.join(self.dir, "ready")):
+            if self.proc.poll() is not None or time.time() > deadline:
+                self.kill()
+                raise WorkerUnavailable("worker did not start")
+            time.sleep(0.05)
+
+    def kill(self):
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.kill()
+        if self.proc is not None:
+            self.proc.wait()
+        self.proc = None
+        if self.dir:
+            shutil.rmtree(self.dir, ignore_errors=True)
+            self.dir = None
+        self.n = 0
+
+    def run(self, shape, group, timeout, delay=0):
+        """-> ("ok", result dict incl. 'brep') | ("timeout"|"crash"|"error", message)."""
+        if self.proc is None or self.proc.poll() is not None:
+            self.kill()
+            self._start()
+        faces = list(shape.Faces)
+        idx = [next(i for i, f in enumerate(faces) if f.isSame(g)) for g in group]
+        self.n += 1
+        n = self.n
+
+        def put(name, text):
+            with open(os.path.join(self.dir, name + ".tmp"), "w") as fh:
+                fh.write(text)
+            os.rename(os.path.join(self.dir, name + ".tmp"), os.path.join(self.dir, name))
+
+        put(f"req{n}.brep", shape.exportBrepToString())
+        put(f"req{n}.json", json.dumps({"faces": idx, "delay": delay}))
+        res_path = os.path.join(self.dir, f"res{n}.json")
+        deadline = time.time() + timeout
+        while not os.path.exists(res_path):
+            if self.proc.poll() is not None:
+                self.kill()
+                return "crash", "the CAD kernel process died"
+            if time.time() > deadline:
+                self.kill()
+                return "timeout", f"no answer after {timeout:g} s"
+            time.sleep(0.01)
+        res = json.load(open(res_path))
+        if "error" in res:
+            return "error", res["error"]
+        res["brep"] = open(os.path.join(self.dir, f"res{n}.brep")).read()
+        return "ok", res
+
+
+_WORKER = _Worker()
+atexit.register(_WORKER.kill)
+
+
+def _judge(group, new_shape):
+    """Facts about a defeaturing result, as a plain dict."""
+    after = list(new_shape.Faces)
+    return {"faces": len(after), "volume": new_shape.Volume, "valid": new_shape.isValid(),
+            "gone": [not any(f.isSame(a) for a in after) for f in group]}
+
+
+def remove_group_ex(shape, group, timeout=None, _test_delay=0):
     """Remove one feature (a group of connected faces).
 
     FreeCAD's defeaturing fails SILENTLY when a face can't be removed - it just
     returns the shape unchanged. Success must therefore be judged by comparing
     the result to the input, not by catching an exception.
+
+    Returns (ok, shape, why, gone) where gone[i] says whether group[i] no longer exists in the result.
     """
+    timeout = DEFEATURE_TIMEOUT if timeout is None else timeout
+    nothing = [False] * len(group)
     try:
-        new_shape = shape.defeaturing(group)
-    except Exception as e:
-        return False, shape, f"exception: {e!r}"
-    changed = len(new_shape.Faces) < len(shape.Faces) or abs(new_shape.Volume - shape.Volume) > 1e-6
+        new_shape = res = None
+        if timeout > 0 and not FreeCAD.GuiUp:
+            try:
+                state, res = _WORKER.run(shape, group, timeout, _test_delay)
+            except WorkerUnavailable:
+                state = "inprocess"      # no worker possible here: run unguarded
+            if state == "timeout":
+                return False, shape, f"timeout ({res})", nothing
+            if state == "crash":
+                return False, shape, f"crash ({res})", nothing
+            if state == "error":
+                return False, shape, f"exception: {res}", nothing
+            if state == "ok":
+                new_shape = Part.Shape()
+                new_shape.importBrepFromString(res["brep"])
+        if new_shape is None:
+            new_shape = shape.defeaturing(group)
+            res = _judge(group, new_shape)
+    except Exception as e:                   # noqa: BLE001
+        return False, shape, f"exception: {e!r}", nothing
+    gone = res["gone"]
+    changed = res["faces"] < len(shape.Faces) or abs(res["volume"] - shape.Volume) > 1e-6
     if not changed:
-        return False, shape, "no-op (shape unchanged)"
-    if not new_shape.isValid():
-        return False, shape, "result invalid"
-    return True, new_shape, "ok"
+        return False, shape, "no-op (shape unchanged)", gone
+    if not res["valid"]:
+        return False, shape, "result invalid", gone
+    return True, new_shape, "ok", gone
+
+
+def remove_group(shape, group):
+    """remove_group_ex() without the per-face `gone` flags: (ok, shape, why)."""
+    ok, new_shape, why, _ = remove_group_ex(shape, group)
+    return ok, new_shape, why
 
 
 def _stages(rule_names):
@@ -179,11 +310,6 @@ def _stages(rule_names):
     own stage, evaluated in the order listed and only after the earlier stages have nothing left."""
     face = [r for r in rule_names if r not in SET_RULES]
     return ([face] if face else []) + [[r] for r in rule_names if r in SET_RULES]
-
-
-def _gone(shape, faces):
-    cur = list(shape.Faces)
-    return [not any(f.isSame(c) for c in cur) for f in faces]
 
 
 def process(shape, rule_names):
@@ -210,9 +336,8 @@ def process(shape, rule_names):
                 continue
             name = stage[0]
             if name in BATCH and name not in batch_dead:
-                ok, new_shape, why = remove_group(current, selected)
+                ok, new_shape, why, gone = remove_group_ex(current, selected)
                 if ok:
-                    gone = _gone(new_shape, selected)
                     if not any(gone) or (BATCH[name] == "only" and not all(gone)):
                         ok, why = False, "requested faces not (fully) removed"
                 if ok:
@@ -245,3 +370,5 @@ def process(shape, rule_names):
 
 
 import ref_rules  # noqa: E402,F401  (registers ref_holes / ref_fillets / ref_protrusions)
+import logo_rules  # noqa: E402,F401  (registers logo)
+import feature_rules  # noqa: E402,F401  (registers rib, boss, chamfer_edge)
