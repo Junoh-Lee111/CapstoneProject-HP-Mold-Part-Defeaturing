@@ -70,9 +70,9 @@ def protrusion_bundles(shape):
 
     out = []
     for h, host in enumerate(t.faces):
-        if stype(host) != "Plane" or t.area[h] < MIN_HOST_AREA:
+        if t.plane(h) is None or t.area[h] < MIN_HOST_AREA:
             continue
-        origin, n, u, v = plane_frame(host)
+        origin, n, u, v = plane_frame(host, t.plane(h))
 
         def heights(i):
             return [(p - origin).dot(n) for p in points(i)]
@@ -104,8 +104,8 @@ def protrusion_bundles(shape):
             # Mean thickness from the TOP faces (parallel to the host, at the top of the bundle): a
             # network of crossing ribs encloses cells, so its outline wire is not a thin strip, but its
             # top face (with the cells as holes) is. thickness = 2 * area / perimeter of those faces.
-            tops = [f for f in bundle if stype(t.faces[f]) == "Plane"
-                    and abs(plane_frame(t.faces[f])[1].dot(n)) > 1 - 1e-6
+            tops = [f for f in bundle if t.plane(f) is not None
+                    and abs(plane_frame(t.faces[f], t.plane(f))[1].dot(n)) > 1 - 1e-6
                     and max(heights(f)) >= height - BELOW_TOL]
             if tops:
                 area = sum(t.area[f] for f in tops)
@@ -174,7 +174,7 @@ def cut_protrusion(shape, group):
     t, bundles = protrusion_bundles(shape)
     for b in bundles:
         if wanted <= {core.sig(t.faces[i]) for i in b["faces"]}:
-            origin, n, u, v = plane_frame(t.faces[b["host"]])
+            origin, n, u, v = plane_frame(t.faces[b["host"]], t.plane(b["host"]))
             pts = [p for i in b["faces"] for p in face_points(t.faces[i])]
             box = box2d(pts, u, v)
             margin = 0.3

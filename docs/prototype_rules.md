@@ -63,11 +63,16 @@ ordinary failure. The GUI demo runs in-process without a limit.
 
 ## 5. Known limits
 
-- Ribs and bosses are only recognized on a **planar** host with an inner wire; ribs on curved or slanted sheets,
-  and features reaching the part's edge, are not found (seen on HP-provided samples).
+- Ribs and bosses are only recognized on a **flat** host (a plane, or a flat free-form face). Ribs that reach the
+  host's edge are found from its outer wire (thin, at least twice as long as wide, at least 3 faces); ribs on
+  genuinely curved hosts are not found.
+- When `defeaturing()` cannot remove a rib or boss, the prism standing on its host plane is cut away instead (boolean
+  cut, same guarded worker). On surface models (shells, no solid) a logo is removed by dropping its faces and
+  re-making the host face without the logo's holes. Both are fallbacks, tried only after defeaturing failed.
 - Marking circles/rings (single circular wire) are treated as holes.
 - B-spline chamfers are detected but FreeCAD cannot remove them (reported as a failure).
-- Press-part logos given as open shells of free-form faces are not handled (no planar host).
+- Press-part logos given as open shells of flat free-form faces are recognized and mostly removed; a few thin
+  stroke fragments of a letter can remain (faces beyond the 3-step limit).
 - The text test cases use the macOS font Arial Bold.
 - Size limits are not validated; whether a hole or rib must be kept (fasteners, structure) depends on the analysis.
 

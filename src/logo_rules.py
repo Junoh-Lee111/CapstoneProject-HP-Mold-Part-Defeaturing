@@ -19,7 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cleancad_core as core  # noqa: E402
-from geom_utils import Topo, stype  # noqa: E402
+from geom_utils import Topo, stype, plane_frame  # noqa: E402,F401
 
 MIN_HOST_AREA = 20.0        # mm2: smaller planar faces are not logo hosts
 MAX_FACE_FRACTION = 0.20    # a bundle face must be smaller than this part of the host area
@@ -38,21 +38,6 @@ def is_circle_wire(wire):
     c0 = edges[0].Curve
     return all(abs(e.Curve.Radius - c0.Radius) < 1e-6 and (e.Curve.Center - c0.Center).Length < 1e-6
                for e in edges)
-
-
-def plane_frame(face):
-    """Origin, unit normal and two in-plane unit axes of a planar face."""
-    s = face.Surface
-    n = s.Axis * (-1 if face.Orientation == "Reversed" else 1)
-    u = s.XDir if hasattr(s, "XDir") else None
-    if u is None or abs(u.dot(n)) > 1e-6:
-        u = n.cross(core.FreeCAD.Vector(1, 0, 0))
-        if u.Length < 1e-6:
-            u = n.cross(core.FreeCAD.Vector(0, 1, 0))
-    u.normalize()
-    v = n.cross(u)
-    v.normalize()
-    return s.Position, n, u, v
 
 
 def box2d(points, u, v):
@@ -92,8 +77,8 @@ def logo_bundles(shape):
         return set()
 
     hosts = [i for i, f in enumerate(t.faces)
-             if stype(f) == "Plane" and len(f.Wires) > 1 and t.area[i] >= MIN_HOST_AREA]
-    frames = {i: plane_frame(t.faces[i]) for i, f in enumerate(t.faces) if stype(f) == "Plane"}
+             if t.plane(i) is not None and len(f.Wires) > 1 and t.area[i] >= MIN_HOST_AREA]
+    frames = {i: plane_frame(t.faces[i], t.plane(i)) for i in range(len(t.faces)) if t.plane(i) is not None}
     bundles = []
     for h in hosts:
         host = t.faces[h]
@@ -134,7 +119,7 @@ def logo_bundles(shape):
                         continue
                     if max_depth is not None and depth > max_depth + 1e-6:
                         continue
-                    if (stype(t.faces[f]) == "Plane" and abs(frames[f][1].dot(n)) > 1 - 1e-9
+                    if (f in frames and abs(frames[f][1].dot(n)) > 1 - 1e-9
                             and abs((frames[f][0] - origin).dot(n)) < 1e-6):
                         continue        # coplanar with the host: part of the host, not of the engraving
                     bundle.add(f)
@@ -150,3 +135,56 @@ def _logo(shape):
     t, bundles = logo_bundles(shape)
     chosen = sorted({i for b in bundles for i in b["faces"]})
     return [t.faces[i] for i in chosen]
+
+
+@core.removal_fallback
+def rebuild_surface_model(shape, group):
+    """Surface models (shells of faces, no solid) cannot be defeatured. A logo is removed there by
+    dropping its faces and re-making the host face without the holes the logo had cut into it."""
+    import Part
+    if shape.Solids:
+        return None
+    t, bundles = logo_bundles(shape)
+    wanted = {core.sig(f) for f in group}
+    mine = [b for b in bundles if {core.sig(t.faces[i]) for i in b["faces"]} <= wanted]
+    if not mine:
+        return None
+    gone = {i for b in mine for i in b["faces"]}
+    new_faces, hosts_done = [], set()
+    for b in mine:
+        h = b["host"]
+        if h in hosts_done:
+            continue
+        hosts_done.add(h)
+        host = t.faces[h]
+        claimed = set()
+        for w in host.Wires:
+            if w.isSame(host.OuterWire):
+                continue
+            if any(o in gone for e in w.Edges for o in _owners(t, e)):
+                claimed.add(id(w))
+        keep = [w for w in host.Wires if not w.isSame(host.OuterWire) and id(w) not in claimed]
+        face = Part.Face(host.OuterWire)
+        for w in keep:
+            face = face.cut(Part.Face(w))
+        new_faces.append(face)
+    # the islands inside letters like A or O lie in the host plane and touch the logo: they go with it
+    for b in mine:
+        h = b["host"]
+        o_h, n_h = plane_frame(t.faces[h], t.plane(h))[:2]
+        for i, f in enumerate(t.faces):
+            if i in gone or i == h or t.plane(i) is None or t.area[i] >= MAX_FACE_FRACTION * t.area[h]:
+                continue
+            o_i, n_i = plane_frame(f, t.plane(i))[:2]
+            if n_i.dot(n_h) > 1 - 1e-9 and abs((o_i - o_h).dot(n_h)) < 1e-4 and t.nb[i] & gone:
+                gone.add(i)
+    skip = gone | hosts_done
+    new_faces += [f for i, f in enumerate(t.faces) if i not in skip]
+    return "result", Part.Compound(new_faces)
+
+
+def _owners(topo, edge):
+    for e, owners in topo.edges:
+        if e.isSame(edge):
+            return owners
+    return set()

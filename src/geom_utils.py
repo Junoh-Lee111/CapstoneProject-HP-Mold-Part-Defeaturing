@@ -11,6 +11,39 @@ def stype(f):
     return type(f.Surface).__name__
 
 
+def plane_of(face):
+    """The plane a face lies in: its own surface if it is a Plane, or - for free-form (B-spline) faces
+    that are in fact flat, as in surface models of pressed parts - the plane found by FreeCAD; else None."""
+    if stype(face) == "Plane":
+        return face.Surface
+    try:
+        return face.findPlane(1e-4)
+    except Exception:           # noqa: BLE001
+        return None
+
+
+def plane_frame(face, plane=None):
+    """Origin, outward unit normal and two in-plane unit axes of a flat face."""
+    from FreeCAD import Vector
+    plane = plane or plane_of(face)
+    u0, u1, v0, v1 = face.ParameterRange
+    try:
+        n = Vector(face.normalAt((u0 + u1) / 2, (v0 + v1) / 2))
+    except Exception:           # noqa: BLE001
+        n = Vector(plane.Axis)
+    n = Vector(plane.Axis) * (1 if Vector(plane.Axis).dot(n) >= 0 else -1)
+    n.normalize()
+    u = Vector(plane.XDir) if hasattr(plane, "XDir") else None
+    if u is None or abs(u.dot(n)) > 1e-6:
+        u = n.cross(Vector(1, 0, 0))
+        if u.Length < 1e-6:
+            u = n.cross(Vector(0, 1, 0))
+    u.normalize()
+    v = n.cross(u)
+    v.normalize()
+    return plane.Position, n, u, v
+
+
 class Topo:
     """Face list + adjacency (shared edges) with identity-based indices."""
 
@@ -34,6 +67,13 @@ class Topo:
             for i in owners:
                 self.nb[i].update(owners - {i})
         self.area = [f.Area for f in self.faces]
+        self._plane = {}
+
+    def plane(self, i):
+        """Plane of face i if it is flat (also free-form faces that are flat), else None."""
+        if i not in self._plane:
+            self._plane[i] = plane_of(self.faces[i])
+        return self._plane[i]
 
 
 def urange(f):

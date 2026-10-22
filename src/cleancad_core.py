@@ -291,41 +291,52 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
 
     FreeCAD's defeaturing fails SILENTLY when a face can't be removed - it just
     returns the shape unchanged. Success must therefore be judged by comparing
-    the result to the input, not by catching an exception. When defeaturing() does nothing, the
-    registered FALLBACKS may propose a tool shape (e.g. the prism above a rib) to cut away instead.
+    the result to the input, not by catching an exception. When defeaturing() does nothing, raises or
+    times out, the registered FALLBACKS may take over: each gets (shape, group) and returns None, a tool
+    shape to cut away (e.g. the prism above a rib), or ("result", new_shape) it built itself.
 
     Returns (ok, shape, why, gone) where gone[i] says whether group[i] no longer exists in the result.
     """
     timeout = DEFEATURE_TIMEOUT if timeout is None else timeout
     nothing = [False] * len(group)
+
+    def changed(res):
+        return res["faces"] < len(shape.Faces) or abs(res["volume"] - shape.Volume) > 1e-6
+
     try:
         state, new_shape, res = _attempt(shape, group, timeout, _test_delay)
+        failure = None                                  # why the first attempt did not work
         if state == "timeout":
-            return False, shape, f"timeout ({res})", nothing
-        if state == "crash":
-            return False, shape, f"crash ({res})", nothing
-        if state == "error":
-            return False, shape, f"exception: {res}", nothing
-        changed = res["faces"] < len(shape.Faces) or abs(res["volume"] - shape.Volume) > 1e-6
+            failure = f"timeout ({res})"
+        elif state == "crash":
+            failure = f"crash ({res})"
+        elif state == "error":
+            failure = f"exception: {res}"
+        elif not changed(res):
+            failure = "no-op (shape unchanged)"
         how = ""
-        if not changed:
+        if failure:
             for fallback in FALLBACKS:
-                tool = fallback(shape, group)
-                if tool is None:
+                proposal = fallback(shape, group)
+                if proposal is None:
                     continue
-                state2, new2, res2 = _attempt(shape, group, timeout, 0, tool)
-                if state2 == "ok" and (res2["faces"] < len(shape.Faces)
-                                       or abs(res2["volume"] - shape.Volume) > 1e-6):
-                    new_shape, res, changed, how = new2, res2, True, " (boolean cut)"
+                if isinstance(proposal, tuple) and proposal[0] == "result":
+                    state2, new2, res2 = "ok", proposal[1], _judge(group, proposal[1])
+                    how2 = " (rebuilt)"
+                else:
+                    state2, new2, res2 = _attempt(shape, group, timeout, 0, proposal)
+                    how2 = " (boolean cut)"
+                if state2 == "ok" and changed(res2):
+                    new_shape, res, failure, how = new2, res2, None, how2
                     break
+            if failure:
+                gone = res["gone"] if state == "ok" else nothing
+                return False, shape, failure, gone
     except Exception as e:                   # noqa: BLE001
         return False, shape, f"exception: {e!r}", nothing
-    gone = res["gone"]
-    if not changed:
-        return False, shape, "no-op (shape unchanged)", gone
     if not res["valid"]:
-        return False, shape, "result invalid", gone
-    return True, new_shape, "ok" + how, gone
+        return False, shape, "result invalid", res["gone"]
+    return True, new_shape, "ok" + how, res["gone"]
 
 
 def remove_group(shape, group):
