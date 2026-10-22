@@ -12,6 +12,10 @@ PROTRUSIONS (rules "rib" and "boss")
             at least 3 thicknesses long;
   Anything lower than the logo depth cap (profile "logo_max_depth") is a marking and left to the logo rule;
   other shapes are not selected.
+  Ribs that touch the EDGE of the host (so that the host has no inner wire for them, as on cut-out
+  samples) are found from the host's outer wire: every connected group of faces standing on the outer
+  side of the host plane is a candidate and is taken for a rib when its footprint box is thin
+  (<= "rib_max_thickness") and at least twice as long as wide.
 CHAMFERS (rule "chamfer_edge")
   A narrow face between two faces that it meets at 25-65 degrees, where those two faces are about a right
   angle apart (a chamfer or countersink replaces a 90 degree edge); width <= profile "chamfer_size".
@@ -27,8 +31,10 @@ from ref_rules import Topo, stype, face_points  # noqa: E402
 from logo_rules import is_circle_wire, plane_frame, box2d  # noqa: E402
 
 MIN_HOST_AREA = 50.0
-BELOW_TOL = 0.02           # mm: a face may dip this far below the host plane and still stand on it
+BELOW_TOL = 0.1            # mm: a face may dip this far below the host plane (root blends) and still stand on it
 RIB_MIN_LENGTH_FACTOR = 3.0
+EDGE_RIB_LENGTH_FACTOR = 2.0
+MIN_EDGE_RIB_FACES = 3       # a rib is more than one sliver face
 CHAMFER_ANGLE = (25.0, 65.0)
 CHAMFER_RIGHT_ANGLE = (65.0, 115.0)
 MIN_CHAMFER_WIDTH = 0.1
@@ -64,7 +70,7 @@ def protrusion_bundles(shape):
 
     out = []
     for h, host in enumerate(t.faces):
-        if stype(host) != "Plane" or len(host.Wires) < 2 or t.area[h] < MIN_HOST_AREA:
+        if stype(host) != "Plane" or t.area[h] < MIN_HOST_AREA:
             continue
         origin, n, u, v = plane_frame(host)
 
@@ -124,7 +130,62 @@ def protrusion_bundles(shape):
             if kind:
                 out.append({"kind": kind, "host": h, "faces": sorted(bundle), "height": height,
                             "thickness": thickness, "length": length})
+        # ribs that reach the edge of the host: components of the faces standing on the host plane,
+        # started from the OUTER wire (the faces below the plane are the plate itself and never qualify)
+        taken = {i for b in out if b["host"] == h for i in b["faces"]}
+        seeds = set()
+        for e in host.OuterWire.Edges:
+            seeds |= owners_of(e)
+        seeds -= {h} | taken
+        seen = set()
+        for seed in sorted(seeds):
+            if seed in seen or not _above(heights(seed)):
+                continue
+            comp, stack = {seed}, [seed]
+            while stack:
+                x = stack.pop()
+                for y in t.nb[x]:
+                    if y != h and y not in comp and y not in taken and _above(heights(y)):
+                        comp.add(y)
+                        stack.append(y)
+            seen |= comp
+            height = max(max(heights(f)) for f in comp)
+            if height <= logo_cap + 1e-6 or len(comp) < MIN_EDGE_RIB_FACES:
+                continue
+            box = box2d([p for f in comp for p in points(f)], u, v)
+            side_a, side_b = box[1] - box[0], box[3] - box[2]
+            width, length = min(side_a, side_b), max(side_a, side_b)
+            if 0 < width <= rib_max and length >= EDGE_RIB_LENGTH_FACTOR * width:
+                out.append({"kind": "rib", "host": h, "faces": sorted(comp), "height": height,
+                            "thickness": width, "length": length})
     return t, out
+
+
+def _above(hs):
+    return bool(hs) and min(hs) >= -BELOW_TOL and max(hs) > BELOW_TOL
+
+
+@core.removal_fallback
+def cut_protrusion(shape, group):
+    """When defeaturing() cannot remove a rib / boss (free-form faces, an edge-attached rib), cut away the
+    prism standing on its host plane: the footprint box of the faces, from the plane up past their top."""
+    from FreeCAD import Matrix, Placement
+    wanted = {core.sig(f) for f in group}
+    t, bundles = protrusion_bundles(shape)
+    for b in bundles:
+        if wanted <= {core.sig(t.faces[i]) for i in b["faces"]}:
+            origin, n, u, v = plane_frame(t.faces[b["host"]])
+            pts = [p for i in b["faces"] for p in face_points(t.faces[i])]
+            box = box2d(pts, u, v)
+            margin = 0.3
+            a0, b0 = box[0] - margin, box[2] - margin
+            prism = __import__("Part").makeBox(box[1] - box[0] + 2 * margin, box[3] - box[2] + 2 * margin,
+                                               b["height"] + 1.0)
+            corner = u * a0 + v * b0 + n * origin.dot(n)
+            prism.Placement = Placement(Matrix(u.x, v.x, n.x, corner.x, u.y, v.y, n.y, corner.y,
+                                               u.z, v.z, n.z, corner.z, 0, 0, 0, 1))
+            return prism
+    return None
 
 
 def _angle(a, b):

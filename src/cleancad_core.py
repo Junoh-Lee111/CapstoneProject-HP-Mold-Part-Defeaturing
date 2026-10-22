@@ -213,8 +213,9 @@ class _Worker:
             self.dir = None
         self.n = 0
 
-    def run(self, shape, group, timeout, delay=0):
-        """-> ("ok", result dict incl. 'brep') | ("timeout"|"crash"|"error", message)."""
+    def run(self, shape, group, timeout, delay=0, tool=None):
+        """-> ("ok", result dict incl. 'brep') | ("timeout"|"crash"|"error", message).
+        With `tool` the worker cuts that shape away instead of calling defeaturing()."""
         if self.proc is None or self.proc.poll() is not None:
             self.kill()
             self._start()
@@ -229,7 +230,9 @@ class _Worker:
             os.rename(os.path.join(self.dir, name + ".tmp"), os.path.join(self.dir, name))
 
         put(f"req{n}.brep", shape.exportBrepToString())
-        put(f"req{n}.json", json.dumps({"faces": idx, "delay": delay}))
+        if tool is not None:
+            put(f"req{n}.tool.brep", tool.exportBrepToString())
+        put(f"req{n}.json", json.dumps({"faces": idx, "delay": delay, "op": "cut" if tool is not None else "defeature"}))
         res_path = os.path.join(self.dir, f"res{n}.json")
         deadline = time.time() + timeout
         while not os.path.exists(res_path):
@@ -247,6 +250,14 @@ class _Worker:
         return "ok", res
 
 
+FALLBACKS = []   # fn(shape, group) -> tool shape to cut away, or None: tried when defeaturing() does nothing
+
+
+def removal_fallback(fn):
+    FALLBACKS.append(fn)
+    return fn
+
+
 _WORKER = _Worker()
 atexit.register(_WORKER.kill)
 
@@ -258,45 +269,63 @@ def _judge(group, new_shape):
             "gone": [not any(f.isSame(a) for a in after) for f in group]}
 
 
+def _attempt(shape, group, timeout, delay=0, tool=None):
+    """One removal attempt (defeaturing, or cutting `tool` away). -> (state, new_shape, result dict | message)"""
+    if timeout > 0 and not FreeCAD.GuiUp:
+        try:
+            state, res = _WORKER.run(shape, group, timeout, delay, tool)
+        except WorkerUnavailable:
+            state = "inprocess"          # no worker possible here: run unguarded
+        if state != "inprocess":
+            if state != "ok":
+                return state, None, res
+            new_shape = Part.Shape()
+            new_shape.importBrepFromString(res["brep"])
+            return "ok", new_shape, res
+    new_shape = shape.defeaturing(group) if tool is None else shape.cut(tool)
+    return "ok", new_shape, _judge(group, new_shape)
+
+
 def remove_group_ex(shape, group, timeout=None, _test_delay=0):
     """Remove one feature (a group of connected faces).
 
     FreeCAD's defeaturing fails SILENTLY when a face can't be removed - it just
     returns the shape unchanged. Success must therefore be judged by comparing
-    the result to the input, not by catching an exception.
+    the result to the input, not by catching an exception. When defeaturing() does nothing, the
+    registered FALLBACKS may propose a tool shape (e.g. the prism above a rib) to cut away instead.
 
     Returns (ok, shape, why, gone) where gone[i] says whether group[i] no longer exists in the result.
     """
     timeout = DEFEATURE_TIMEOUT if timeout is None else timeout
     nothing = [False] * len(group)
     try:
-        new_shape = res = None
-        if timeout > 0 and not FreeCAD.GuiUp:
-            try:
-                state, res = _WORKER.run(shape, group, timeout, _test_delay)
-            except WorkerUnavailable:
-                state = "inprocess"      # no worker possible here: run unguarded
-            if state == "timeout":
-                return False, shape, f"timeout ({res})", nothing
-            if state == "crash":
-                return False, shape, f"crash ({res})", nothing
-            if state == "error":
-                return False, shape, f"exception: {res}", nothing
-            if state == "ok":
-                new_shape = Part.Shape()
-                new_shape.importBrepFromString(res["brep"])
-        if new_shape is None:
-            new_shape = shape.defeaturing(group)
-            res = _judge(group, new_shape)
+        state, new_shape, res = _attempt(shape, group, timeout, _test_delay)
+        if state == "timeout":
+            return False, shape, f"timeout ({res})", nothing
+        if state == "crash":
+            return False, shape, f"crash ({res})", nothing
+        if state == "error":
+            return False, shape, f"exception: {res}", nothing
+        changed = res["faces"] < len(shape.Faces) or abs(res["volume"] - shape.Volume) > 1e-6
+        how = ""
+        if not changed:
+            for fallback in FALLBACKS:
+                tool = fallback(shape, group)
+                if tool is None:
+                    continue
+                state2, new2, res2 = _attempt(shape, group, timeout, 0, tool)
+                if state2 == "ok" and (res2["faces"] < len(shape.Faces)
+                                       or abs(res2["volume"] - shape.Volume) > 1e-6):
+                    new_shape, res, changed, how = new2, res2, True, " (boolean cut)"
+                    break
     except Exception as e:                   # noqa: BLE001
         return False, shape, f"exception: {e!r}", nothing
     gone = res["gone"]
-    changed = res["faces"] < len(shape.Faces) or abs(res["volume"] - shape.Volume) > 1e-6
     if not changed:
         return False, shape, "no-op (shape unchanged)", gone
     if not res["valid"]:
         return False, shape, "result invalid", gone
-    return True, new_shape, "ok", gone
+    return True, new_shape, "ok" + how, gone
 
 
 def remove_group(shape, group):

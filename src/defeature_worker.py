@@ -3,7 +3,8 @@ give up (and kill this process) when the CAD kernel hangs.
 
 Started by cleancad_core as `freecadcmd src/defeature_worker.py` with CLEANCAD_WORKER_DIR set.
 Protocol (files in that directory, written atomically by rename):
-  req<N>.brep + req<N>.json {"faces": [indices into shape.Faces], "delay": seconds (tests only)}
+  req<N>.brep + req<N>.json {"faces": [indices into shape.Faces], "delay": seconds (tests only),
+                              "op": "cut" (optional; then req<N>.tool.brep is cut away instead)}
   -> res<N>.brep + res<N>.json {"faces", "volume", "valid", "gone": [...]} or {"error": "..."}
 Exits when the parent process is gone or a file named "stop" appears.
 """
@@ -44,7 +45,12 @@ def handle(n):
         shape.importBrepFromString(open(path(f"req{n}.brep")).read())
         all_faces = list(shape.Faces)
         group = [all_faces[i] for i in meta["faces"]]
-        new_shape = shape.defeaturing(group)
+        if meta.get("op") == "cut":        # remove a protrusion by cutting away a prism instead
+            tool = Part.Shape()
+            tool.importBrepFromString(open(path(f"req{n}.tool.brep")).read())
+            new_shape = shape.cut(tool)
+        else:
+            new_shape = shape.defeaturing(group)
         after = list(new_shape.Faces)
         write_atomic(f"res{n}.brep", new_shape.exportBrepToString())
         res = {"faces": len(after), "volume": new_shape.Volume, "valid": new_shape.isValid(),

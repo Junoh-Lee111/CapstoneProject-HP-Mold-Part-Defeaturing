@@ -54,9 +54,9 @@ check("next removal works again", ok2 and len(s2.Faces) == len(plate.Faces) - 1,
 orig_run, calls = core._WORKER.run, {"n": 0}
 
 
-def first_call_hangs(shape, group, timeout, delay=0):
+def first_call_hangs(shape, group, timeout, delay=0, tool=None):
     calls["n"] += 1
-    return orig_run(shape, group, timeout, 60 if calls["n"] == 1 else delay)
+    return orig_run(shape, group, timeout, 60 if calls["n"] == 1 else delay, tool)
 
 
 core._WORKER.run = first_call_hangs
