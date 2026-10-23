@@ -34,6 +34,7 @@ MIN_HOST_AREA = 50.0
 BELOW_TOL = 0.1            # mm: a face may dip this far below the host plane (root blends) and still stand on it
 RIB_MIN_LENGTH_FACTOR = 3.0
 EDGE_RIB_LENGTH_FACTOR = 2.0
+EDGE_RIB_MAX_HEIGHT = 3.0    # mm: a taller group at the edge is structure (a wall, a flange), not a rib
 MIN_EDGE_RIB_FACES = 3       # a rib is more than one sliver face
 CHAMFER_ANGLE = (25.0, 65.0)
 CHAMFER_RIGHT_ANGLE = (65.0, 115.0)
@@ -131,26 +132,49 @@ def protrusion_bundles(shape):
                 out.append({"kind": kind, "host": h, "faces": sorted(bundle), "height": height,
                             "thickness": thickness, "length": length})
         # ribs that reach the edge of the host: components of the faces standing on the host plane,
-        # started from the OUTER wire (the faces below the plane are the plate itself and never qualify)
-        taken = {i for b in out if b["host"] == h for i in b["faces"]}
+        # started from the OUTER wire (the faces below the plane are the plate itself and never qualify).
+        # The host may be a gently bent sheet: faces are also measured against the neighbouring flat
+        # faces reached through bends of at most BEND_ANGLE degrees, so a rib running over a bend is one rib.
+        taken = {i for b in out for i in b["faces"]}
+        near = _bent_hosts(t, h)
+        frames = {q: plane_frame(t.faces[q], t.plane(q)) for q in near}
+
+        def support(y, parent):
+            """The flat face that y stands on (parent's support, or a touching bent host), else None."""
+            for q in [parent] + [q for q in near if q != parent and q in t.nb[y]]:
+                o_q, n_q = frames[q][0], frames[q][1]
+                hs_q = [(p - o_q).dot(n_q) for p in points(y)]
+                # beyond the first host only low features count: a tall wall is not part of a rib
+                if _above(hs_q) and (q == h or max(hs_q) <= BENT_MAX_HEIGHT):
+                    return q
+            return None
+
         seeds = set()
         for e in host.OuterWire.Edges:
             seeds |= owners_of(e)
-        seeds -= {h} | taken
+        seeds -= set(near) | taken
         seen = set()
         for seed in sorted(seeds):
-            if seed in seen or not _above(heights(seed)):
+            if seed in seen:
                 continue
-            comp, stack = {seed}, [seed]
+            sup0 = support(seed, h)
+            if sup0 is None:
+                continue
+            comp, sup, stack = {seed}, {seed: sup0}, [seed]
             while stack:
                 x = stack.pop()
                 for y in t.nb[x]:
-                    if y != h and y not in comp and y not in taken and _above(heights(y)):
+                    if y in near or y in comp or y in taken:
+                        continue
+                    s_y = support(y, sup[x])
+                    if s_y is not None:
                         comp.add(y)
+                        sup[y] = s_y
                         stack.append(y)
             seen |= comp
-            height = max(max(heights(f)) for f in comp)
-            if height <= logo_cap + 1e-6 or len(comp) < MIN_EDGE_RIB_FACES:
+            height = max(max((p - frames[sup[f]][0]).dot(frames[sup[f]][1]) for p in points(f)) for f in comp)
+            if (height <= logo_cap + 1e-6 or height > EDGE_RIB_MAX_HEIGHT
+                    or len(comp) < MIN_EDGE_RIB_FACES):
                 continue
             box = box2d([p for f in comp for p in points(f)], u, v)
             side_a, side_b = box[1] - box[0], box[3] - box[2]
@@ -159,6 +183,31 @@ def protrusion_bundles(shape):
                 out.append({"kind": "rib", "host": h, "faces": sorted(comp), "height": height,
                             "thickness": width, "length": length})
     return t, out
+
+
+BENT_MAX_HEIGHT = 3.0   # mm: height limit for the part of a rib that lies on a bent-away neighbour host
+BEND_ANGLE = 20.0   # degrees: flat faces this close in direction count as one gently bent host
+
+
+def _bent_hosts(t, h):
+    """h and the flat faces of a minimum host size reachable from it through shared edges at bends of
+    at most BEND_ANGLE degrees."""
+    norm = {}
+
+    def normal(i):
+        if i not in norm:
+            norm[i] = plane_frame(t.faces[i], t.plane(i))[1]
+        return norm[i]
+
+    found, stack = {h}, [h]
+    while stack:
+        x = stack.pop()
+        for y in t.nb[x]:
+            if (y not in found and t.plane(y) is not None and t.area[y] >= MIN_HOST_AREA
+                    and _angle(normal(x), normal(y)) <= BEND_ANGLE):
+                found.add(y)
+                stack.append(y)
+    return found
 
 
 def _above(hs):

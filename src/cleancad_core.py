@@ -282,7 +282,7 @@ def _attempt(shape, group, timeout, delay=0, tool=None):
             new_shape = Part.Shape()
             new_shape.importBrepFromString(res["brep"])
             return "ok", new_shape, res
-    new_shape = shape.defeaturing(group) if tool is None else shape.cut(tool)
+    new_shape = shape.defeaturing(group) if tool is None else shape.cut(tool).removeSplitter()
     return "ok", new_shape, _judge(group, new_shape)
 
 

@@ -48,7 +48,7 @@ def handle(n):
         if meta.get("op") == "cut":        # remove a protrusion by cutting away a prism instead
             tool = Part.Shape()
             tool.importBrepFromString(open(path(f"req{n}.tool.brep")).read())
-            new_shape = shape.cut(tool)
+            new_shape = shape.cut(tool).removeSplitter()   # merge the coplanar pieces the cut leaves
         else:
             new_shape = shape.defeaturing(group)
         after = list(new_shape.Faces)
