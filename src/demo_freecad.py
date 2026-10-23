@@ -30,6 +30,7 @@ AUTOQUIT = os.environ.get("CLEANCAD_AUTOQUIT") == "1"
 # remove them from the selection. CLEANCAD_AUTO=1 keeps the old timer-driven run (used for unattended runs).
 INTERACTIVE = os.environ.get("CLEANCAD_AUTO") != "1"
 BANNER_STEP = "#1f4e79"
+UI_ALPHA = 0.78            # opacity of the on-screen messages (1.0 = solid)
 GRAY, RED, ORANGE = (0.75, 0.78, 0.82), (0.85, 0.12, 0.12), (1.0, 0.55, 0.0)
 BANNER_FAIL, BANNER_OK = "#c0392b", "#2e7d32"
 
@@ -92,6 +93,40 @@ def paint_before():
 _banner = {}
 _legend = {}
 
+_dismissed = set()          # message kinds the user closed with the X (all come back with the H key)
+
+
+def _close_button(label, kind):
+    """A small X in the top right corner of an on-screen message; closing it keeps that kind of message hidden."""
+    button = label.findChild(QtWidgets.QPushButton)
+    if button is None:
+        button = QtWidgets.QPushButton("\u2715", label)
+        button.setFlat(True)
+        button.setCursor(QtCore.Qt.PointingHandCursor)
+        button.setStyleSheet("background:transparent; color:white; font-size:18px; font-weight:bold; border:none;")
+        button.resize(28, 28)
+        button.clicked.connect(lambda: (_dismissed.add(kind), label.hide()))
+    button.move(max(0, label.width() - button.width() - 4), 2)
+    button.raise_()
+
+
+def _shown(kind):
+    return kind not in _dismissed
+
+
+def toggle_messages():
+    """H key: bring closed messages back, or close them all."""
+    if _dismissed:
+        _dismissed.clear()
+        for refresh in (_refresh_banner, _refresh_legend, _refresh_counter):
+            refresh()
+    else:
+        _dismissed.update(("banner", "legend", "counter"))
+        for lab in (_banner, _legend, _counter):
+            if "label" in lab:
+                lab["label"].hide()
+
+
 
 def show_legend(text):
     main = Gui.getMainWindow()
@@ -102,12 +137,20 @@ def show_legend(text):
         _legend["label"] = label
     label = _legend["label"]
     label.setText(text)
-    _set_opacity(label, 1.0)
+    _legend["text"] = text
+    _set_opacity(label, UI_ALPHA)
     area = main.centralWidget()
     origin = area.mapTo(main, QtCore.QPoint(0, 0))
     label.setGeometry(origin.x() + 20, origin.y() + area.height() - 84, area.width() - 40, 34)
-    label.show()
-    label.raise_()
+    _close_button(label, "legend")
+    if _shown("legend"):
+        label.show()
+        label.raise_()
+
+
+def _refresh_legend():
+    if "text" in _legend:
+        show_legend(_legend["text"])
 
 
 def hide_legend():
@@ -126,13 +169,21 @@ def show_banner(text, bg, height=100):
     label = _banner["label"]
     label.setStyleSheet(f"background:{bg}; color:white; font-size:20px; font-weight:bold; padding:10px;")
     label.setText(text)
-    _set_opacity(label, 1.0)
+    _banner["args"] = (text, bg, height)
+    _set_opacity(label, UI_ALPHA)
     area = main.centralWidget()
     origin = area.mapTo(main, QtCore.QPoint(0, 0))
     label.setGeometry(origin.x() + 20, origin.y() + 12, area.width() - 40, height)
-    label.show()
-    label.raise_()
+    _close_button(label, "banner")
+    if _shown("banner"):
+        label.show()
+        label.raise_()
     Gui.updateGui()
+
+
+def _refresh_banner():
+    if "args" in _banner:
+        show_banner(*_banner["args"])
 
 
 def hide_banner():
@@ -174,7 +225,7 @@ class _RestoreOnClose(QtCore.QObject):
 
 
 def declutter():
-    """Hide the model tree / task panel / toolbars so the 3D view fills the window. Called again on every
+    """Hide the model tree and task panels (not the toolbars) so the 3D view is wider. Called again on every
     refocus: FreeCAD may open a task panel a few seconds after launch."""
     main = Gui.getMainWindow()
     if not _hidden:
@@ -188,7 +239,7 @@ def declutter():
         pass
     overlays = [w for w in main.findChildren(QtWidgets.QWidget)
                 if "Overlay" in w.metaObject().className() or "TaskView" in w.metaObject().className()]
-    for widget in main.findChildren(QtWidgets.QDockWidget) + main.findChildren(QtWidgets.QToolBar) + overlays:
+    for widget in main.findChildren(QtWidgets.QDockWidget) + overlays:
         if widget.isVisible():
             if widget not in _hidden:
                 _hidden.append(widget)
@@ -421,8 +472,8 @@ def finish():
     def fade(t):
         before_vo.Transparency = int(round(100 * (1 - t)))
         text_alpha = min(1.0, max(0.0, (t - 0.4) / 0.6))  # messages appear in the second half of the move
-        _set_opacity(_banner["label"], text_alpha)
-        _set_opacity(_legend["label"], text_alpha)
+        _set_opacity(_banner["label"], text_alpha * UI_ALPHA)
+        _set_opacity(_legend["label"], text_alpha * UI_ALPHA)
 
     fade(0.0)
     failed_faces = [f for f in shape.Faces if core.sig(f) in state["failed"]]
@@ -512,24 +563,35 @@ _counter = {}
 
 
 def show_counter(html):
+    _counter["hidden"] = False
     main = Gui.getMainWindow()
     if "label" not in _counter:
         label = QtWidgets.QLabel(main)
         label.setTextFormat(QtCore.Qt.RichText)
         label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        label.setStyleSheet("background:rgba(0,0,0,190); color:white; font-size:16px; padding:8px 12px;")
+        label.setStyleSheet("background:rgba(0,0,0,190); color:white; font-size:16px; padding:8px 40px 8px 12px;")
         _counter["label"] = label
     label = _counter["label"]
     label.setText(html)
+    _counter["html"] = html
+    _set_opacity(label, UI_ALPHA)
     area = main.centralWidget()
     origin = area.mapTo(main, QtCore.QPoint(0, 0))
     label.adjustSize()
     label.move(origin.x() + area.width() - label.width() - 20, origin.y() + area.height() - 94 - label.height())
-    label.show()
-    label.raise_()
+    _close_button(label, "counter")
+    if _shown("counter"):
+        label.show()
+        label.raise_()
+
+
+def _refresh_counter():
+    if "html" in _counter and not _counter.get("hidden"):
+        show_counter(_counter["html"])
 
 
 def hide_counter():
+    _counter["hidden"] = True
     if "label" in _counter:
         _counter["label"].hide()
 
@@ -566,7 +628,7 @@ def interactive_begin():
     fit_view(iso=True)
     state["vo"].DiffuseColor = [GRAY] * len(state["obj"].Shape.Faces)
     show_banner(f"{state['job']['name']}: ORIGINAL model  -  press \u2192 to run the automatic selection", BANNER_STEP, 64)
-    show_legend("\u2192 next step   |   \u2190 back   |   R reset selection")
+    show_legend("\u2192 next step   |   \u2190 back   |   H show / hide messages")
     hide_counter()
     window_snapshot("original")
 
@@ -583,7 +645,7 @@ def go_select():
     paint_before()
     show_banner("AUTOMATIC SELECTION (red)  -  click a face to ADD it, click a red face to REMOVE it, "
                 "then press \u2192 to remove the red faces", BANNER_STEP, 64)
-    show_legend("Click: add / remove a face   |   \u2192 start removal   |   \u2190 back   |   R reset to automatic")
+    show_legend("Click: add / remove a face   |   \u2192 start removal   |   \u2190 back   |   R reset   |   H show / hide messages")
     update_counter()
     window_snapshot("selection")
 
@@ -719,6 +781,9 @@ class _Keys(QtCore.QObject):
     def eventFilter(self, obj, event):
         if event.type() == QtCore.QEvent.KeyPress and state.get("phase"):
             key = event.key()
+            if event.isAutoRepeat():       # a held key must not run through all the steps
+                return key in (QtCore.Qt.Key_Right, QtCore.Qt.Key_Down, QtCore.Qt.Key_Space,
+                               QtCore.Qt.Key_Return, QtCore.Qt.Key_Left, QtCore.Qt.Key_Up, QtCore.Qt.Key_Backspace)
             if key in (QtCore.Qt.Key_Right, QtCore.Qt.Key_Down, QtCore.Qt.Key_Space, QtCore.Qt.Key_Return):
                 go_next()
                 return True
@@ -727,6 +792,9 @@ class _Keys(QtCore.QObject):
                 return True
             if key == QtCore.Qt.Key_R:
                 reset_selection()
+                return True
+            if key == QtCore.Qt.Key_H:
+                toggle_messages()
                 return True
         return False
 
