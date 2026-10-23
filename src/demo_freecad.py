@@ -434,7 +434,7 @@ def start(index):
     job = jobs[index]
     state.clear()
     state.update(index=index, job=job, n=0, failed=set(), phase="view", removed=0, failures=[],
-                 sel=set(), auto=set(), history=[], busy=False)
+                 sel=set(), auto=set(), history=[], busy=False, warned=set(), warning=False)
     open(os.path.join(WORKDIR, "logs", f"{job['name']}.log"), "w").close()
     hide_banner()
     hide_legend()
@@ -674,9 +674,15 @@ def sel_faces(shape):
 
 def paint_sel():
     shape = state["obj"].Shape
-    state["vo"].DiffuseColor = [
-        ORANGE if core.sig(f) in state["failed"] else RED if core.sig(f) in state["sel"] else GRAY
-        for f in shape.Faces]
+    def color(f):
+        s = core.sig(f)
+        if s in state["failed"]:
+            return ORANGE
+        if s in state["sel"]:
+            return RED if s in state["auto"] else ORANGE   # orange: selected by hand, outside the rules
+        return GRAY
+
+    state["vo"].DiffuseColor = [color(f) for f in shape.Faces]
     Gui.updateGui()
 
 
@@ -707,11 +713,13 @@ def update_counter():
     faces = sel_faces(shape)
     n = len(faces)
     added, removed = len(state["sel"] - state["auto"]), len(state["auto"] - state["sel"])
+    outside = len({core.sig(f) for f in faces} - state["auto"])
     if state["phase"] == "select":
         features = len(core.groups(shape, faces)) if len(shape.Faces) <= 400 and faces else ("-" if faces else 0)
         show_counter(_table("REMOVAL SELECTION", [
             ("To remove", f"{n} faces \u00b7 {features} features", None),
             ("Edited by you", f"+{added} added \u00b7 \u2212{removed} removed", "#7CFC00" if added or removed else None),
+            *([("Outside the rules", f"{outside} faces", "#ffb347")] if outside else []),
             ("Model", f"{len(shape.Faces)} faces", None)]))
     elif state["phase"] == "removing":
         if len(shape.Faces) <= 400:      # the total follows clicks made while the steps run
@@ -749,7 +757,7 @@ def show_swatch(visible=True):
         _swatch["label"] = label
     label = _swatch["label"]
     label.setText("<span style='color:#d91f1f;'>\u25a0</span> selected for removal &nbsp;&nbsp;"
-                  "<span style='color:#ff8c00;'>\u25a0</span> removal failed &nbsp;&nbsp;"
+                  "<span style='color:#ff8c00;'>\u25a0</span> outside the rules / removal failed &nbsp;&nbsp;"
                   "<span style='color:#bfc7d1;'>\u25a0</span> kept")
     _set_opacity(label, UI_ALPHA)
     area = main.centralWidget()
@@ -806,12 +814,21 @@ def toggle_face(index):
         state["sel"].add(sig)
         log(f"CLICK face {index}: added to the selection")
     paint_sel()
+    if state["warning"]:
+        pending = override_sigs()
+        if pending:
+            show_override_warning(pending)
+        else:                               # the faces outside the rules were deselected: no warning needed
+            state["warning"] = False
+            phase_banner()
     update_counter()
 
 
 def reset_selection():
     if state.get("phase") == "select":
         state["sel"] = set(state["auto"])
+        state["warning"] = False
+        phase_banner()
         paint_sel()
         update_counter()
         log("selection reset to the automatic one")
@@ -897,6 +914,7 @@ def go_back():
     phase = state.get("phase")
     if state.get("busy"):
         return
+    state["warning"] = False
     if phase == "select":
         state["phase"] = "orig"
         interactive_begin()
@@ -920,10 +938,57 @@ def go_back():
             fit_view(iso=True)
 
 
+BANNER_WARN = "#b35900"
+
+
+def override_sigs():
+    """Selected faces of the current model that the rules did not select and the user has not yet been warned about."""
+    shape = state["obj"].Shape
+    return {core.sig(f) for f in sel_faces(shape)} - state["auto"] - state["warned"]
+
+
+def phase_banner():
+    """The normal message of the current phase (after a warning went away)."""
+    if state["phase"] == "select":
+        show_banner("AUTOMATIC SELECTION (red)  -  click a face to ADD it, click a red face to REMOVE it, "
+                    "then press \u2192 to remove the red faces", BANNER_STEP, 64)
+    elif state["phase"] == "removing":
+        show_banner(f"Removed {state['removed']} of {state['total']} feature(s)  -  press \u2192 for the next step",
+                    BANNER_STEP, 64)
+
+
+def show_override_warning(pending):
+    state["warning"] = True
+    show_banner(f"\u26a0 WARNING: {len(pending)} selected face(s) are NOT selected by the rules (orange). "
+                f"Removing them can change the part. Click an orange face to deselect it, "
+                f"or press \u2192 again to continue anyway.", BANNER_WARN, 78)
+    log(f"WARNING shown: {len(pending)} face(s) outside the rules")
+
+
+def override_gate():
+    """True if the step must wait: the first press with faces outside the rules only shows the warning;
+    pressing again accepts them (the warning goes away) and the work continues."""
+    if state["phase"] not in ("select", "removing"):
+        return False
+    pending = override_sigs()
+    if not pending:
+        return False
+    if not state["warning"]:
+        show_override_warning(pending)
+        return True
+    state["warned"] |= pending
+    state["warning"] = False
+    log(f"WARNING accepted: continuing with {len(pending)} face(s) outside the rules")
+    phase_banner()
+    return False
+
+
 @_guard
 def go_next():
     phase = state.get("phase")
     if state.get("busy"):
+        return
+    if override_gate():
         return
     if phase == "orig":
         go_select()
