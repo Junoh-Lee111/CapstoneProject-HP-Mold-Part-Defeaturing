@@ -7,6 +7,7 @@ Jobs come from $CLEANCAD_WORKDIR/samples/examples/manifest.json (all examples, o
 via CLEANCAD_ONLY=name1,name2), or a single external file via CLEANCAD_INPUT + CLEANCAD_RULE.
 All results (STEP, snapshots, logs) are written under $CLEANCAD_WORKDIR - nothing in the repo.
 """
+import math
 import os
 import re
 import sys
@@ -96,18 +97,34 @@ _legend = {}
 _dismissed = set()          # message kinds the user closed with the X (all come back with the H key)
 
 
+class MessageLabel(QtWidgets.QLabel):
+    """An on-screen message with an X in its top right corner; the X follows the label's size. Closing it
+    keeps that kind of message hidden until the H key brings the messages back."""
+
+    def __init__(self, parent, kind):
+        super().__init__(parent)
+        self.kind = kind
+        self.button = QtWidgets.QPushButton("\u2715", self)
+        self.button.setFlat(True)
+        self.button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.button.setStyleSheet("background:transparent; color:white; font-size:18px; font-weight:bold; "
+                                  "border:none; padding:0; min-width:0; min-height:0;")
+        self.button.setFixedSize(28, 28)
+        self.button.clicked.connect(self._dismiss)
+
+    def _dismiss(self):
+        _dismissed.add(self.kind)
+        self.hide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.button.move(max(0, self.width() - self.button.width() - 4), 2)
+        self.button.raise_()
+
+
 def _close_button(label, kind):
-    """A small X in the top right corner of an on-screen message; closing it keeps that kind of message hidden."""
-    button = label.findChild(QtWidgets.QPushButton)
-    if button is None:
-        button = QtWidgets.QPushButton("\u2715", label)
-        button.setFlat(True)
-        button.setCursor(QtCore.Qt.PointingHandCursor)
-        button.setStyleSheet("background:transparent; color:white; font-size:18px; font-weight:bold; border:none;")
-        button.resize(28, 28)
-        button.clicked.connect(lambda: (_dismissed.add(kind), label.hide()))
-    button.move(max(0, label.width() - button.width() - 4), 2)
-    button.raise_()
+    label.button.move(max(0, label.width() - label.button.width() - 4), 2)
+    label.button.raise_()
 
 
 def _shown(kind):
@@ -131,7 +148,7 @@ def toggle_messages():
 def show_legend(text):
     main = Gui.getMainWindow()
     if "label" not in _legend:
-        label = QtWidgets.QLabel(main)
+        label = MessageLabel(main, "legend")
         label.setAlignment(QtCore.Qt.AlignCenter)
         label.setStyleSheet("background:rgba(0,0,0,170); color:white; font-size:16px; padding:6px;")
         _legend["label"] = label
@@ -162,7 +179,7 @@ def show_banner(text, bg, height=100):
     """On-screen message over the 3D view, so a failure can't be mistaken for a crash."""
     main = Gui.getMainWindow()
     if "label" not in _banner:
-        label = QtWidgets.QLabel(main)
+        label = MessageLabel(main, "banner")
         label.setWordWrap(True)
         label.setAlignment(QtCore.Qt.AlignCenter)
         _banner["label"] = label
@@ -346,6 +363,46 @@ def animate_view(set_target, on_done, ms=900, on_frame=None, centers=None):
                 view.fitAll()
             log(f"camera turn finished ({frames} interpolated frames)")
             on_done()
+        else:
+            QtCore.QTimer.singleShot(33, tick)
+
+    tick()
+
+
+def glide_to_box(box, then, ms=700):
+    """Smoothly zoom the camera onto `box` (a feature) without changing the viewing direction; a little room
+    is left around it. `then()` runs when the glide is done."""
+    view = Gui.activeDocument().activeView()
+    try:
+        text, start_pos, start_h = _read_cam(view)
+        rot = view.getCameraOrientation()
+        back = rot.multVec(App.Vector(0, 0, 1))                   # from the scene towards the camera
+        radius = max(box.DiagonalLength / 2, 1.0) * 1.6           # room around the feature
+        whole = state["obj"].Shape.BoundBox
+        d0 = abs((start_pos - whole.Center).dot(back))
+        if start_h is not None:                                   # orthographic camera
+            end_h = min(start_h, max(2 * radius, 0.1 * start_h))
+            end_d = d0
+        else:                                                     # perspective camera
+            m = re.search(r"heightAngle\s+(\S+)", text)
+            half = float(m.group(1)) / 2 if m else 0.3927
+            end_h = None
+            end_d = min(d0, max(radius / math.tan(half), 0.1 * d0))
+        end_pos = box.Center + back * end_d
+    except Exception as e:                                         # noqa: BLE001
+        log(f"zoom to feature unavailable ({e!r})")
+        return then()
+    frames, count = max(1, ms // 33), [0]
+
+    def tick():
+        count[0] += 1
+        s = count[0] / frames
+        s = s * s * (3 - 2 * s)
+        pos = start_pos + (end_pos - start_pos) * s
+        _write_cam(view, text, pos, None if end_h is None else start_h * (1 - s) + end_h * s)
+        Gui.updateGui()
+        if count[0] >= frames:
+            then()
         else:
             QtCore.QTimer.singleShot(33, tick)
 
@@ -566,7 +623,7 @@ def show_counter(html):
     _counter["hidden"] = False
     main = Gui.getMainWindow()
     if "label" not in _counter:
-        label = QtWidgets.QLabel(main)
+        label = MessageLabel(main, "counter")
         label.setTextFormat(QtCore.Qt.RichText)
         label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         label.setStyleSheet("background:rgba(0,0,0,190); color:white; font-size:16px; padding:8px 40px 8px 12px;")
@@ -577,7 +634,7 @@ def show_counter(html):
     _set_opacity(label, UI_ALPHA)
     area = main.centralWidget()
     origin = area.mapTo(main, QtCore.QPoint(0, 0))
-    label.adjustSize()
+    label.setFixedSize(label.sizeHint())                      # size to the text incl. the padding left for the X
     label.move(origin.x() + area.width() - label.width() - 20, origin.y() + area.height() - 94 - label.height())
     _close_button(label, "counter")
     if _shown("counter"):
@@ -715,9 +772,23 @@ def remove_next():
         paint_sel()
         snapshot("final")
         state["busy"] = True
-        return finish()
-    state["history"].append((current, set(state["failed"]), list(state["failures"]), state["removed"]))
+        whole = state["obj"].Shape.BoundBox
+        return glide_to_box(whole, finish, ms=500)      # zoom back out, then the before / after screen
     group = groups[0]
+    box = App.BoundBox()
+    for f in group:
+        box.add(f.BoundBox)
+    state["busy"] = True
+
+    def after_zoom():
+        state["busy"] = False
+        _remove_group(current, group)
+
+    glide_to_box(box, _guard(after_zoom))
+
+
+def _remove_group(current, group):
+    state["history"].append((current, set(state["failed"]), list(state["failures"]), state["removed"]))
     kinds = ",".join(sorted({type(f.Surface).__name__ for f in group}))
     ok, new_shape, why = core.remove_group(current, group)
     if ok:
