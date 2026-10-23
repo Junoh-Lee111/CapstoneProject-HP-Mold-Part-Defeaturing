@@ -26,6 +26,10 @@ import cleancad_core as core
 DELAY_MS = int(os.environ.get("CLEANCAD_DELAY_MS", "1200"))
 FAIL_HOLD_MS = int(os.environ.get("CLEANCAD_FAIL_HOLD_MS", "4500"))
 AUTOQUIT = os.environ.get("CLEANCAD_AUTOQUIT") == "1"
+# Interactive by default: the arrow keys step through the demo and faces can be clicked to add them to /
+# remove them from the selection. CLEANCAD_AUTO=1 keeps the old timer-driven run (used for unattended runs).
+INTERACTIVE = os.environ.get("CLEANCAD_AUTO") != "1"
+BANNER_STEP = "#1f4e79"
 GRAY, RED, ORANGE = (0.75, 0.78, 0.82), (0.85, 0.12, 0.12), (1.0, 0.55, 0.0)
 BANNER_FAIL, BANNER_OK = "#c0392b", "#2e7d32"
 
@@ -75,6 +79,10 @@ def paint():
 def paint_before():
     """The static BEFORE copy (shown to the left): original shape, faces selected for removal in red."""
     src = state["source"]
+    if INTERACTIVE:
+        chosen = state.get("sel_start", state["sel"])
+        state["before"].ViewObject.DiffuseColor = [RED if core.sig(f) in chosen else GRAY for f in src.Faces]
+        return
     ctx = core.Ctx(src)
     fns = [core.RULES[r] for r in state["job"]["rules"]]
     state["before"].ViewObject.DiffuseColor = [
@@ -107,7 +115,7 @@ def hide_legend():
         _legend["label"].hide()
 
 
-def show_banner(text, bg):
+def show_banner(text, bg, height=100):
     """On-screen message over the 3D view, so a failure can't be mistaken for a crash."""
     main = Gui.getMainWindow()
     if "label" not in _banner:
@@ -121,7 +129,7 @@ def show_banner(text, bg):
     _set_opacity(label, 1.0)
     area = main.centralWidget()
     origin = area.mapTo(main, QtCore.QPoint(0, 0))
-    label.setGeometry(origin.x() + 20, origin.y() + 12, area.width() - 40, 100)
+    label.setGeometry(origin.x() + 20, origin.y() + 12, area.width() - 40, height)
     label.show()
     label.raise_()
     Gui.updateGui()
@@ -151,11 +159,54 @@ def ensure_active():
     return False
 
 
+_hidden = []
+
+
+class _RestoreOnClose(QtCore.QObject):
+    """Brings the side panels and toolbars back when the window closes, so the user's normal FreeCAD
+    layout (which FreeCAD saves on exit) is not changed by the demo."""
+
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.Close:
+            for widget in _hidden:
+                widget.show()
+        return False
+
+
+def declutter():
+    """Hide the model tree / task panel / toolbars so the 3D view fills the window. Called again on every
+    refocus: FreeCAD may open a task panel a few seconds after launch."""
+    main = Gui.getMainWindow()
+    if not _hidden:
+        try:
+            Gui.activateWorkbench("PartWorkbench")   # Part Design would ask to create a body (a task panel)
+        except Exception:                            # noqa: BLE001
+            pass
+    try:
+        Gui.Control.closeDialog()
+    except Exception:                                # noqa: BLE001
+        pass
+    overlays = [w for w in main.findChildren(QtWidgets.QWidget)
+                if "Overlay" in w.metaObject().className() or "TaskView" in w.metaObject().className()]
+    for widget in main.findChildren(QtWidgets.QDockWidget) + main.findChildren(QtWidgets.QToolBar) + overlays:
+        if widget.isVisible():
+            if widget not in _hidden:
+                _hidden.append(widget)
+            widget.hide()
+    if not getattr(main, "_cleancad_filter", None):
+        main._cleancad_filter = _RestoreOnClose(main)       # keep a reference
+        main.installEventFilter(main._cleancad_filter)
+    Gui.updateGui()
+
+
 def fit_view(iso=False):
     view = Gui.activeDocument().activeView()
     if iso:
         view.viewIsometric()
-    view.fitAll()
+    try:
+        view.fitAll(1.25)     # zoom out a little: room for the banner on top and the counter at the bottom
+    except Exception:         # noqa: BLE001
+        view.fitAll()
     Gui.updateGui()
 
 
@@ -274,7 +325,8 @@ def start(index):
         return
     job = jobs[index]
     state.clear()
-    state.update(index=index, job=job, n=0, failed=set(), phase="view", removed=0, failures=[])
+    state.update(index=index, job=job, n=0, failed=set(), phase="view", removed=0, failures=[],
+                 sel=set(), auto=set(), history=[], busy=False)
     open(os.path.join(WORKDIR, "logs", f"{job['name']}.log"), "w").close()
     hide_banner()
     hide_legend()
@@ -302,11 +354,12 @@ def start(index):
 
     def refocus(i):
         if state.get("index") == i and ensure_active():
-            fit_view(iso=state.get("phase") in ("view", "fit2", "show"))
+            declutter()
+            fit_view(iso=state.get("phase") in ("view", "fit2", "show", "orig", "select"))
 
     for delay in (400, 1500, 3000, 5000, 8000):  # the Start page may appear a few seconds after launch
         QtCore.QTimer.singleShot(delay, lambda i=index: refocus(i))
-    QtCore.QTimer.singleShot(900, step)
+    QtCore.QTimer.singleShot(900, interactive_begin if INTERACTIVE else step)
 
 
 def finish():
@@ -336,8 +389,16 @@ def finish():
         start(index + 1)
 
     def show_result():
+        declutter()
         snapshot("compare")
         window_snapshot("summary")
+        if INTERACTIVE:
+            state["phase"], state["busy"], state["next_job"] = "result", False, next_job
+            show_legend("RESULT: LEFT = BEFORE (red = selected), RIGHT = AFTER   |   \u2192 next example   "
+                        "\u2190 back one step" if not last else
+                        "RESULT: LEFT = BEFORE (red = selected), RIGHT = AFTER   |   \u2190 back one step   "
+                        "(last example)")
+            return
         if failures and last and not AUTOQUIT:
             return  # keep the result on screen; closing it would look like a crash
         QtCore.QTimer.singleShot(FAIL_HOLD_MS if failures else DELAY_MS, next_job)
@@ -352,6 +413,7 @@ def finish():
     show_banner(summary, BANNER_FAIL if failures else BANNER_OK)
     show_legend("LEFT: BEFORE (original, red = selected for removal)   |   "
                 "RIGHT: AFTER (defeatured result, orange = removal failed)")
+    hide_counter()
     after_box = App.BoundBox(shape.BoundBox)
     both_box = App.BoundBox(after_box)
     both_box.add(state["before"].Shape.BoundBox)
@@ -440,6 +502,276 @@ def step():
         set_target = face_view_fn(group[0])
         return animate_view(set_target, after_turn) if set_target else after_turn()
     QtCore.QTimer.singleShot(DELAY_MS, step)
+
+
+# ----------------------------------------------------------------------------------------------------
+# Interactive mode: arrow keys step through the demo; clicking a face adds it to / removes it from the
+# selection; a live counter (bottom right) shows what is selected.
+# ----------------------------------------------------------------------------------------------------
+_counter = {}
+
+
+def show_counter(html):
+    main = Gui.getMainWindow()
+    if "label" not in _counter:
+        label = QtWidgets.QLabel(main)
+        label.setTextFormat(QtCore.Qt.RichText)
+        label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        label.setStyleSheet("background:rgba(0,0,0,190); color:white; font-size:16px; padding:8px 12px;")
+        _counter["label"] = label
+    label = _counter["label"]
+    label.setText(html)
+    area = main.centralWidget()
+    origin = area.mapTo(main, QtCore.QPoint(0, 0))
+    label.adjustSize()
+    label.move(origin.x() + area.width() - label.width() - 20, origin.y() + area.height() - 94 - label.height())
+    label.show()
+    label.raise_()
+
+
+def hide_counter():
+    if "label" in _counter:
+        _counter["label"].hide()
+
+
+def sel_faces(shape):
+    return [f for f in shape.Faces if core.sig(f) in state["sel"] and core.sig(f) not in state["failed"]]
+
+
+def paint_sel():
+    shape = state["obj"].Shape
+    state["vo"].DiffuseColor = [
+        ORANGE if core.sig(f) in state["failed"] else RED if core.sig(f) in state["sel"] else GRAY
+        for f in shape.Faces]
+    Gui.updateGui()
+
+
+def update_counter():
+    shape = state["obj"].Shape
+    faces = sel_faces(shape)
+    n = len(faces)
+    if state["phase"] == "select":
+        features = len(core.groups(shape, faces)) if len(shape.Faces) <= 400 and faces else ("-" if faces else 0)
+        added, removed = len(state["sel"] - state["auto"]), len(state["auto"] - state["sel"])
+        show_counter(f"<b>Selected: {n} face(s)</b> in {features} feature(s)<br>"
+                     f"automatic {len(state['auto'])} &nbsp;|&nbsp; <span style='color:#7CFC00'>+{added} added</span>"
+                     f" &nbsp;|&nbsp; <span style='color:#ffb347'>\u2212{removed} removed</span>")
+    elif state["phase"] == "removing":
+        show_counter(f"<b>Removed: {state['removed']} / {state['total']} feature(s)</b><br>"
+                     f"still selected: {n} face(s) &nbsp;|&nbsp; failed: {len(state['failures'])}")
+
+
+def interactive_begin():
+    state["phase"] = "orig"
+    fit_view(iso=True)
+    state["vo"].DiffuseColor = [GRAY] * len(state["obj"].Shape.Faces)
+    show_banner(f"{state['job']['name']}: ORIGINAL model  -  press \u2192 to run the automatic selection", BANNER_STEP, 64)
+    show_legend("\u2192 next step   |   \u2190 back   |   R reset selection")
+    hide_counter()
+    window_snapshot("original")
+
+
+def go_select():
+    shape = state["obj"].Shape
+    if not state["auto"] and not state["sel"]:
+        picked = core.select(shape, state["job"]["rules"])
+        state["auto"] = {core.sig(f) for f in picked}
+        state["sel"] = set(state["auto"])
+        log(f"AUTO-SELECTION {len(state['auto'])} faces")
+    state["phase"] = "select"
+    paint_sel()
+    paint_before()
+    show_banner("AUTOMATIC SELECTION (red)  -  click a face to ADD it, click a red face to REMOVE it, "
+                "then press \u2192 to remove the red faces", BANNER_STEP, 64)
+    show_legend("Click: add / remove a face   |   \u2192 start removal   |   \u2190 back   |   R reset to automatic")
+    update_counter()
+    window_snapshot("selection")
+
+
+def toggle_face(index):
+    """index: 1-based face number, as in the 'FaceN' name the 3D view reports for a click."""
+    shape = state["obj"].Shape
+    if state.get("phase") != "select" or not 1 <= index <= len(shape.Faces):
+        return
+    sig = core.sig(shape.Faces[index - 1])
+    if sig in state["sel"]:
+        state["sel"].discard(sig)
+        log(f"CLICK face {index}: removed from the selection")
+    else:
+        state["sel"].add(sig)
+        log(f"CLICK face {index}: added to the selection")
+    paint_sel()
+    update_counter()
+
+
+def reset_selection():
+    if state.get("phase") == "select":
+        state["sel"] = set(state["auto"])
+        paint_sel()
+        update_counter()
+        log("selection reset to the automatic one")
+
+
+def begin_removal():
+    shape = state["obj"].Shape
+    faces = sel_faces(shape)
+    if not faces:
+        show_banner("Nothing is selected - click a face to select it first", BANNER_FAIL)
+        return
+    groups = core.groups(shape, faces)
+    state.update(phase="removing", total=len(groups), sel_start=set(state["sel"]))
+    log(f"HIGHLIGHT {len(faces)} faces red in {len(groups)} feature group(s)")
+    paint_before()
+    state["history"] = []
+    remove_next()
+
+
+def remove_next():
+    current = state["obj"].Shape
+    faces = sel_faces(current)
+    groups = core.groups(current, faces) if faces else []
+    if not groups:
+        paint_sel()
+        snapshot("final")
+        state["busy"] = True
+        return finish()
+    state["history"].append((current, set(state["failed"]), list(state["failures"]), state["removed"]))
+    group = groups[0]
+    kinds = ",".join(sorted({type(f.Surface).__name__ for f in group}))
+    ok, new_shape, why = core.remove_group(current, group)
+    if ok:
+        state["obj"].Shape = new_shape
+        state["doc"].recompute()
+        state["removed"] += 1
+        log(f"REMOVED feature ({len(group)} faces: {kinds}): "
+            f"faces {len(current.Faces)}->{len(new_shape.Faces)} volume={new_shape.Volume:.2f}")
+        paint_sel()
+        snapshot("removed")
+        show_banner(f"Feature {state['removed']} of {state['total']} removed ({len(group)} faces: {kinds})"
+                    f"  -  press \u2192 for the next step", BANNER_STEP, 64)
+        show_legend("\u2192 next step   |   \u2190 undo this step")
+        update_counter()
+        return
+    state["failed"].update(core.sig(f) for f in group)
+    state["failures"].append({"faces": len(group), "types": sorted({type(f.Surface).__name__ for f in group}),
+                              "sigs": [core.sig(f) for f in group], "reason": why})
+    log(f"FAILED feature ({len(group)} faces: {kinds}): {why} -> kept, geometry+face IDs stored")
+    paint_sel()
+    snapshot("failed")
+    show_banner(f"REMOVAL FAILED: {len(group)} face(s) ({kinds}) could not be removed ({why}). "
+                f"The failed face is orange. Original geometry kept; geometry + face IDs saved for manual correction.",
+                BANNER_FAIL)
+    show_legend("\u2192 next step   |   \u2190 undo this step")
+    update_counter()
+    state["busy"] = True
+
+    def after_turn():
+        window_snapshot("failed_banner")
+        state["busy"] = False
+
+    set_target = face_view_fn(group[0])
+    animate_view(set_target, after_turn) if set_target else after_turn()
+
+
+def go_back():
+    phase = state.get("phase")
+    if state.get("busy"):
+        return
+    if phase == "select":
+        state["phase"] = "orig"
+        interactive_begin()
+    elif phase in ("removing", "result"):
+        if phase == "result":
+            state["before"].ViewObject.Visibility = False
+            hide_legend()
+            state["phase"] = "removing"
+        if state["history"]:
+            shape, failed, failures, removed = state["history"].pop()
+            state["obj"].Shape = shape
+            state["doc"].recompute()
+            state["failed"], state["failures"], state["removed"] = failed, failures, removed
+            paint_sel()
+            fit_view(iso=True)
+            show_banner("Step undone  -  press \u2192 to redo it, \u2190 to undo more", BANNER_STEP, 64)
+            show_legend("\u2192 next step   |   \u2190 undo this step")
+            update_counter()
+        else:
+            state["sel_start"] = None
+            go_select()
+            fit_view(iso=True)
+
+
+def go_next():
+    phase = state.get("phase")
+    if state.get("busy"):
+        return
+    if phase == "orig":
+        go_select()
+    elif phase == "select":
+        begin_removal()
+    elif phase == "removing":
+        remove_next()
+    elif phase == "result":
+        state["next_job"]()
+
+
+class _Keys(QtCore.QObject):
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.KeyPress and state.get("phase"):
+            key = event.key()
+            if key in (QtCore.Qt.Key_Right, QtCore.Qt.Key_Down, QtCore.Qt.Key_Space, QtCore.Qt.Key_Return):
+                go_next()
+                return True
+            if key in (QtCore.Qt.Key_Left, QtCore.Qt.Key_Up, QtCore.Qt.Key_Backspace):
+                go_back()
+                return True
+            if key == QtCore.Qt.Key_R:
+                reset_selection()
+                return True
+        return False
+
+
+class _Picker:
+    """Selection observer: a click on a face of our model toggles it in the selection."""
+
+    def addSelection(self, doc, obj, sub, pnt):
+        if state.get("phase") != "select" or doc != state["doc"].Name or obj != state["obj"].Name:
+            return
+        if sub.startswith("Face"):
+            try:
+                toggle_face(int(sub[4:]))
+            finally:
+                Gui.Selection.clearSelection()
+
+
+if INTERACTIVE:
+    _keys = _Keys()
+    QtWidgets.QApplication.instance().installEventFilter(_keys)
+    _picker = _Picker()
+    Gui.Selection.addObserver(_picker)
+
+    # unattended test of the interactive mode: CLEANCAD_TEST_SEQ="n,n,t:5,n,b,..." (n next, b back,
+    # t:K toggle face K, r reset), one action every 2.5 s
+    _seq = [s for s in os.environ.get("CLEANCAD_TEST_SEQ", "").split(",") if s]
+
+    def _run_seq():
+        if not _seq:
+            return
+        if state.get("busy"):
+            return QtCore.QTimer.singleShot(800, _run_seq)
+        action = _seq.pop(0)
+        if action == "n":
+            go_next()
+        elif action == "b":
+            go_back()
+        elif action == "r":
+            reset_selection()
+        elif action.startswith("t:"):
+            toggle_face(int(action[2:]))
+        QtCore.QTimer.singleShot(2500, lambda: (window_snapshot(f"seq_{action.replace(':', '')}"), _run_seq()))
+
+    if _seq:
+        QtCore.QTimer.singleShot(6000, _run_seq)
 
 
 start(0)
