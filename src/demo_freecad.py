@@ -135,11 +135,11 @@ def toggle_messages():
     """H key: bring closed messages back, or close them all."""
     if _dismissed:
         _dismissed.clear()
-        for refresh in (_refresh_banner, _refresh_legend, _refresh_counter):
+        for refresh in (_refresh_banner, _refresh_legend, _refresh_counter, lambda: show_swatch(state.get("phase") in ("select", "removing"))):
             refresh()
     else:
-        _dismissed.update(("banner", "legend", "counter"))
-        for lab in (_banner, _legend, _counter):
+        _dismissed.update(("banner", "legend", "counter", "swatch"))
+        for lab in (_banner, _legend, _counter, _swatch):
             if "label" in lab:
                 lab["label"].hide()
 
@@ -454,6 +454,7 @@ def start(index):
     before.Placement = App.Placement(App.Vector(-shift, -shift, 0), App.Rotation())
     doc.recompute()
     state["source"] = obj.Shape
+    state["faces0"], state["vol0"] = len(obj.Shape.Faces), obj.Shape.Volume if obj.Shape.Solids else 0.0
     state["doc"], state["obj"], state["vo"], state["before"] = doc, obj, obj.ViewObject, before
     state["vo"].DisplayMode = "Flat Lines"
     before.ViewObject.DisplayMode = "Flat Lines"
@@ -521,7 +522,8 @@ def finish():
     show_banner(summary, BANNER_FAIL if failures else BANNER_OK)
     show_legend("LEFT: BEFORE (original, red = selected for removal)   |   "
                 "RIGHT: AFTER (defeatured result, orange = removal failed)")
-    hide_counter()
+    show_swatch(False)
+    show_result_counter()
     after_box = App.BoundBox(shape.BoundBox)
     both_box = App.BoundBox(after_box)
     both_box.add(state["before"].Shape.BoundBox)
@@ -678,24 +680,87 @@ def paint_sel():
     Gui.updateGui()
 
 
+VOLUME_WARN = 5.0      # percent: a bigger volume change is flagged (a structural face may have been removed)
+
+
+def _table(title, rows, title_color="#ffffff"):
+    """HTML for the counter: a title and label / value rows. rows: (label, value, color or None)."""
+    body = "".join(
+        f"<tr><td style='color:#bbbbbb; padding-right:18px;'>{label}</td>"
+        f"<td align='right' style='color:{color or '#ffffff'};'><b>{value}</b></td></tr>"
+        for label, value, color in rows)
+    return (f"<table cellspacing='2'><tr><td colspan='2' style='color:{title_color};'><b>{title}</b></td></tr>"
+            f"{body}</table>")
+
+
+def _volume_row(shape):
+    if not shape.Solids or not state.get("vol0"):
+        return ("Volume", "n/a (surface model)", None)
+    change = (shape.Volume - state["vol0"]) / state["vol0"] * 100
+    if abs(change) >= VOLUME_WARN:
+        return ("Volume", f"{change:+.1f} %  \u26a0 check", "#ffb347")
+    return ("Volume", f"{change:+.1f} %", None)
+
+
 def update_counter():
     shape = state["obj"].Shape
     faces = sel_faces(shape)
     n = len(faces)
+    added, removed = len(state["sel"] - state["auto"]), len(state["auto"] - state["sel"])
     if state["phase"] == "select":
         features = len(core.groups(shape, faces)) if len(shape.Faces) <= 400 and faces else ("-" if faces else 0)
-        added, removed = len(state["sel"] - state["auto"]), len(state["auto"] - state["sel"])
-        show_counter(f"<b>Selected: {n} face(s)</b> in {features} feature(s)<br>"
-                     f"automatic {len(state['auto'])} &nbsp;|&nbsp; <span style='color:#7CFC00'>+{added} added</span>"
-                     f" &nbsp;|&nbsp; <span style='color:#ffb347'>\u2212{removed} removed</span>")
+        show_counter(_table("REMOVAL SELECTION", [
+            ("To remove", f"{n} faces \u00b7 {features} features", None),
+            ("Edited by you", f"+{added} added \u00b7 \u2212{removed} removed", "#7CFC00" if added or removed else None),
+            ("Model", f"{len(shape.Faces)} faces", None)]))
     elif state["phase"] == "removing":
         if len(shape.Faces) <= 400:      # the total follows clicks made while the steps run
             state["total"] = state["removed"] + len(state["failures"]) + (len(core.groups(shape, faces)) if faces else 0)
-        added, removed = len(state["sel"] - state["auto"]), len(state["auto"] - state["sel"])
-        show_counter(f"<b>Removed: {state['removed']} / {state['total']} feature(s)</b><br>"
-                     f"still selected: {n} face(s) &nbsp;|&nbsp; failed: {len(state['failures'])}<br>"
-                     f"<span style='color:#7CFC00'>+{added} added</span> &nbsp;|&nbsp; "
-                     f"<span style='color:#ffb347'>\u2212{removed} removed</span> (vs. automatic)")
+        total, done = max(state["total"], 1), state["removed"] + len(state["failures"])
+        dots = "\u25cf" * min(done, total) + "\u25cb" * max(total - done, 0)
+        failed = len(state["failures"])
+        show_counter(_table(f"REMOVING  {dots}  {done} of {state['total']}", [
+            ("Faces", f"{state['faces0']} \u2192 {len(shape.Faces)}  ({len(shape.Faces) - state['faces0']:+d})", None),
+            _volume_row(shape),
+            ("Failed", str(failed), "#ffb347" if failed else None),
+            ("Still selected", f"{n} faces", None)]))
+
+
+def show_result_counter():
+    shape = state["obj"].Shape
+    f0, f1 = state["faces0"], len(shape.Faces)
+    failed = len(state["failures"])
+    show_counter(_table("RESULT", [
+        ("Faces", f"{f0} \u2192 {f1}  ({(f1 - f0) / f0 * 100:+.0f} %)", None),
+        _volume_row(shape),
+        ("Features", f"{state['removed']} removed \u00b7 {failed} failed", "#ffb347" if failed else None)]))
+
+
+# colour key (bottom left): what red / orange / grey mean
+_swatch = {}
+
+
+def show_swatch(visible=True):
+    main = Gui.getMainWindow()
+    if "label" not in _swatch:
+        label = MessageLabel(main, "swatch")
+        label.setTextFormat(QtCore.Qt.RichText)
+        label.setStyleSheet("background:rgba(0,0,0,170); color:white; font-size:15px; padding:6px 40px 6px 12px;")
+        _swatch["label"] = label
+    label = _swatch["label"]
+    label.setText("<span style='color:#d91f1f;'>\u25a0</span> selected for removal &nbsp;&nbsp;"
+                  "<span style='color:#ff8c00;'>\u25a0</span> removal failed &nbsp;&nbsp;"
+                  "<span style='color:#bfc7d1;'>\u25a0</span> kept")
+    _set_opacity(label, UI_ALPHA)
+    area = main.centralWidget()
+    origin = area.mapTo(main, QtCore.QPoint(0, 0))
+    label.setFixedSize(label.sizeHint())
+    label.move(origin.x() + 20, origin.y() + area.height() - 94 - label.height())
+    if visible and "swatch" not in _dismissed:
+        label.show()
+        label.raise_()
+    else:
+        label.hide()
 
 
 def interactive_begin():
@@ -703,7 +768,8 @@ def interactive_begin():
     fit_view(iso=True)
     state["vo"].DiffuseColor = [GRAY] * len(state["obj"].Shape.Faces)
     show_banner(f"{state['job']['name']}: ORIGINAL model  -  press \u2192 to run the automatic selection", BANNER_STEP, 64)
-    show_legend("\u2192 next step   |   \u2190 back   |   H show / hide messages")
+    show_legend("\u2192 next    \u2190 back    H hide messages")
+    show_swatch(False)
     hide_counter()
     window_snapshot("original")
 
@@ -720,7 +786,8 @@ def go_select():
     paint_before()
     show_banner("AUTOMATIC SELECTION (red)  -  click a face to ADD it, click a red face to REMOVE it, "
                 "then press \u2192 to remove the red faces", BANNER_STEP, 64)
-    show_legend("Click: add / remove a face   |   \u2192 start removal   |   \u2190 back   |   R reset   |   H show / hide messages")
+    show_legend("Click: add / remove a face    \u2192 start removal    \u2190 back    R reset    H hide messages")
+    show_swatch(True)
     update_counter()
     window_snapshot("selection")
 
@@ -801,7 +868,7 @@ def _remove_group(current, group):
         snapshot("removed")
         show_banner(f"Feature {state['removed']} of {state['total']} removed ({len(group)} faces: {kinds})"
                     f"  -  press \u2192 for the next step", BANNER_STEP, 64)
-        show_legend("\u2192 next step   |   \u2190 undo this step   |   Click: add / remove a face   |   H show / hide messages")
+        show_legend("\u2192 next    \u2190 undo    Click: add / remove a face    H hide messages")
         update_counter()
         return
     state["failed"].update(core.sig(f) for f in group)
@@ -813,7 +880,7 @@ def _remove_group(current, group):
     show_banner(f"REMOVAL FAILED: {len(group)} face(s) ({kinds}) could not be removed ({why}). "
                 f"The failed face is orange. Original geometry kept; geometry + face IDs saved for manual correction.",
                 BANNER_FAIL)
-    show_legend("\u2192 next step   |   \u2190 undo this step   |   Click: add / remove a face   |   H show / hide messages")
+    show_legend("\u2192 next    \u2190 undo    Click: add / remove a face    H hide messages")
     update_counter()
     state["busy"] = True
 
@@ -846,7 +913,7 @@ def go_back():
             paint_sel()
             fit_view(iso=True)
             show_banner("Step undone  -  press \u2192 to redo it, \u2190 to undo more", BANNER_STEP, 64)
-            show_legend("\u2192 next step   |   \u2190 undo this step   |   Click: add / remove a face   |   H show / hide messages")
+            show_legend("\u2192 next    \u2190 undo    Click: add / remove a face    H hide messages")
             update_counter()
         else:
             go_select()
