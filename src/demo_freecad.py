@@ -81,7 +81,7 @@ def paint_before():
     """The static BEFORE copy (shown to the left): original shape, faces selected for removal in red."""
     src = state["source"]
     if INTERACTIVE:
-        chosen = state.get("sel_start", state["sel"])
+        chosen = state["sel"]
         state["before"].ViewObject.DiffuseColor = [RED if core.sig(f) in chosen else GRAY for f in src.Faces]
         return
     ctx = core.Ctx(src)
@@ -596,6 +596,19 @@ def hide_counter():
         _counter["label"].hide()
 
 
+def _guard(fn):
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception:                              # noqa: BLE001
+            import traceback
+            state["busy"] = False
+            log("ERROR in " + fn.__name__ + ":\n" + traceback.format_exc())
+            show_banner(f"Internal error in {fn.__name__} - see logs/{state['job']['name']}.log", BANNER_FAIL, 64)
+    wrapper.__name__ = fn.__name__
+    return wrapper
+
+
 def sel_faces(shape):
     return [f for f in shape.Faces if core.sig(f) in state["sel"] and core.sig(f) not in state["failed"]]
 
@@ -619,8 +632,13 @@ def update_counter():
                      f"automatic {len(state['auto'])} &nbsp;|&nbsp; <span style='color:#7CFC00'>+{added} added</span>"
                      f" &nbsp;|&nbsp; <span style='color:#ffb347'>\u2212{removed} removed</span>")
     elif state["phase"] == "removing":
+        if len(shape.Faces) <= 400:      # the total follows clicks made while the steps run
+            state["total"] = state["removed"] + len(state["failures"]) + (len(core.groups(shape, faces)) if faces else 0)
+        added, removed = len(state["sel"] - state["auto"]), len(state["auto"] - state["sel"])
         show_counter(f"<b>Removed: {state['removed']} / {state['total']} feature(s)</b><br>"
-                     f"still selected: {n} face(s) &nbsp;|&nbsp; failed: {len(state['failures'])}")
+                     f"still selected: {n} face(s) &nbsp;|&nbsp; failed: {len(state['failures'])}<br>"
+                     f"<span style='color:#7CFC00'>+{added} added</span> &nbsp;|&nbsp; "
+                     f"<span style='color:#ffb347'>\u2212{removed} removed</span> (vs. automatic)")
 
 
 def interactive_begin():
@@ -650,10 +668,11 @@ def go_select():
     window_snapshot("selection")
 
 
+@_guard
 def toggle_face(index):
     """index: 1-based face number, as in the 'FaceN' name the 3D view reports for a click."""
     shape = state["obj"].Shape
-    if state.get("phase") != "select" or not 1 <= index <= len(shape.Faces):
+    if state.get("phase") not in ("select", "removing") or state.get("busy") or not 1 <= index <= len(shape.Faces):
         return
     sig = core.sig(shape.Faces[index - 1])
     if sig in state["sel"]:
@@ -681,7 +700,7 @@ def begin_removal():
         show_banner("Nothing is selected - click a face to select it first", BANNER_FAIL)
         return
     groups = core.groups(shape, faces)
-    state.update(phase="removing", total=len(groups), sel_start=set(state["sel"]))
+    state.update(phase="removing", total=len(groups))
     log(f"HIGHLIGHT {len(faces)} faces red in {len(groups)} feature group(s)")
     paint_before()
     state["history"] = []
@@ -711,7 +730,7 @@ def remove_next():
         snapshot("removed")
         show_banner(f"Feature {state['removed']} of {state['total']} removed ({len(group)} faces: {kinds})"
                     f"  -  press \u2192 for the next step", BANNER_STEP, 64)
-        show_legend("\u2192 next step   |   \u2190 undo this step")
+        show_legend("\u2192 next step   |   \u2190 undo this step   |   Click: add / remove a face   |   H show / hide messages")
         update_counter()
         return
     state["failed"].update(core.sig(f) for f in group)
@@ -723,7 +742,7 @@ def remove_next():
     show_banner(f"REMOVAL FAILED: {len(group)} face(s) ({kinds}) could not be removed ({why}). "
                 f"The failed face is orange. Original geometry kept; geometry + face IDs saved for manual correction.",
                 BANNER_FAIL)
-    show_legend("\u2192 next step   |   \u2190 undo this step")
+    show_legend("\u2192 next step   |   \u2190 undo this step   |   Click: add / remove a face   |   H show / hide messages")
     update_counter()
     state["busy"] = True
 
@@ -735,6 +754,7 @@ def remove_next():
     animate_view(set_target, after_turn) if set_target else after_turn()
 
 
+@_guard
 def go_back():
     phase = state.get("phase")
     if state.get("busy"):
@@ -755,14 +775,14 @@ def go_back():
             paint_sel()
             fit_view(iso=True)
             show_banner("Step undone  -  press \u2192 to redo it, \u2190 to undo more", BANNER_STEP, 64)
-            show_legend("\u2192 next step   |   \u2190 undo this step")
+            show_legend("\u2192 next step   |   \u2190 undo this step   |   Click: add / remove a face   |   H show / hide messages")
             update_counter()
         else:
-            state["sel_start"] = None
             go_select()
             fit_view(iso=True)
 
 
+@_guard
 def go_next():
     phase = state.get("phase")
     if state.get("busy"):
@@ -803,7 +823,7 @@ class _Picker:
     """Selection observer: a click on a face of our model toggles it in the selection."""
 
     def addSelection(self, doc, obj, sub, pnt):
-        if state.get("phase") != "select" or doc != state["doc"].Name or obj != state["obj"].Name:
+        if state.get("phase") not in ("select", "removing") or doc != state["doc"].Name or obj != state["obj"].Name:
             return
         if sub.startswith("Face"):
             try:
