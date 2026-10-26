@@ -22,10 +22,14 @@ os.makedirs(FAIL_DIR, exist_ok=True)
 def main():
     manifest = json.load(open(os.path.join(EXAMPLES, "manifest.json")))
     rows = []
-    for entry in manifest:
+    jobs = [(e, e["rules"], "scaffolding") for e in manifest]
+    jobs += [(e, e["generic_rules"], "generic") for e in manifest if "generic_rules" in e]
+    for entry, rules, variant in jobs:
+        core.set_profile("recognition_only" if variant == "generic" else "hp_example")
         source = Part.read(entry["file"])
-        final_shape, removed, failures = core.process(source, entry["rules"])
-        out_path = os.path.join(OUT_DIR, f"{entry['name']}_defeatured.step")
+        final_shape, removed, failures = core.process(source, rules)
+        label = entry["name"] + ("" if variant == "scaffolding" else " [generic]")
+        out_path = os.path.join(OUT_DIR, f"{entry['name']}{'' if variant == 'scaffolding' else '_generic'}_defeatured.step")
         final_shape.exportStep(out_path)
 
         if failures:  # FR-DEF-04 / NFR-REL-02: keep geometry + failed face IDs for manual fix + retraining
@@ -40,10 +44,10 @@ def main():
             and final_shape.isValid()
             and round_trip.isValid()
         )
-        rows.append((entry["name"], len(source.Faces), len(final_shape.Faces), entry["expected_faces"],
+        rows.append((label, len(source.Faces), len(final_shape.Faces), entry["expected_faces"],
                      round(final_shape.Volume, 2), entry["expected_volume"], len(removed), len(failures),
                      "PASS" if ok else "CHECK"))
-        print(f"RESULT {entry['name']:20s} faces {len(source.Faces):3d}->{len(final_shape.Faces):3d} "
+        print(f"RESULT {label:28s} faces {len(source.Faces):3d}->{len(final_shape.Faces):3d} "
               f"(expected {entry['expected_faces']:3d})  volume {final_shape.Volume:10.2f} "
               f"(expected {entry['expected_volume']:10.2f})  removed={len(removed)} failed={len(failures)}  "
               f"{'PASS' if ok else 'CHECK'}")

@@ -75,7 +75,7 @@ def on_base(face, base_faces):
 
 
 def save(name, shape, rules, expected_faces, expected_volume, note, expect_failure=False,
-         base=None, kinds=()):
+         base=None, kinds=(), generic_rules=None):
     """base: the clean shape expected after defeaturing (ground truth = faces not on it);
     kinds: ordered [(feature_type, predicate(face))]; first match names a truth face's type."""
     path = os.path.join(OUT, f"{name}.step")
@@ -85,13 +85,16 @@ def save(name, shape, rules, expected_faces, expected_volume, note, expect_failu
         expected_faces=expected_faces, expected_volume=round(expected_volume, 3),
         expect_failure=expect_failure, note=note,
     )
+    if generic_rules:
+        # the same case through the generic rules (profile recognition_only): same expected result
+        entry["generic_rules"] = generic_rules
     if base is not None:
         # re-read so the signatures match what the evaluation sees (STEP round trip)
         loaded = Part.read(path)
         base_faces = list(base.Faces)
         truth = []
         for f in loaded.Faces:
-            if on_base(f, base_faces):
+            if base is shape or on_base(f, base_faces):     # base is shape: nothing is to be removed
                 continue
             ftype = next((t for t, pred in kinds if pred(f)), "other")
             truth.append({"sig": list(sig(f)), "type": ftype})
@@ -121,7 +124,8 @@ def gen_plate_hole_fillets():
     plate = plate.makeFillet(1.0, top_edges)
     save("plate_hole_fillets", plate, ["cyl"], 6, PLATE_VOL,
          "through hole + edge fillets -> plain plate",
-         base=flat_plate(), kinds=[("hole", full), ("fillet", cyl)])
+         base=flat_plate(), kinds=[("hole", full), ("fillet", cyl)],
+         generic_rules=["ref_holes", "ref_fillets"])
 
 
 def curved_press(detailed):
@@ -156,7 +160,8 @@ def gen_curved_press():
     # not sheet.Volume above (which is the shape as generated, before removal).
     save("curved_press", sheet, ["cyl"], 10, 43686.879,
          "curved sheet R300 t2.5, cut-out with R3 corners + 2 holes -> healed curved sheet",
-         base=curved_press(False), kinds=[("hole", full), ("fillet", cyl)])
+         base=curved_press(False), kinds=[("hole", full), ("fillet", cyl)],
+         generic_rules=["ref_holes", "ref_fillets"])
 
 
 def gen_ribbed():
@@ -171,7 +176,8 @@ def gen_ribbed():
     shape = shape.makeFillet(0.5, root)
     save("ribbed", shape, ["prot"], 6, 150 * 100 * t,
          "3 separate ribs (one with root fillets) -> plain plate",
-         base=plate, kinds=[("fillet", cyl), ("rib", lambda f: True)])
+         base=plate, kinds=[("fillet", cyl), ("rib", lambda f: True)],
+         generic_rules=["rib"])
 
 
 def gen_chamfer():
@@ -183,7 +189,8 @@ def gen_chamfer():
     base = flat_plate().cut(Part.makeCylinder(3, 10, Vector(50, 30, -2)))
     save("chamfer", plate, ["chamfer"], 7, PLATE_VOL - math.pi * 9 * 3,
          "perimeter chamfer + countersink -> plate with a plain hole",
-         base=base, kinds=[("countersink", cone), ("chamfer", lambda f: True)])
+         base=base, kinds=[("countersink", cone), ("chamfer", lambda f: True)],
+         generic_rules=["chamfer_edge"])
 
 
 def gen_boss():
@@ -192,7 +199,8 @@ def gen_boss():
     base = flat_plate().cut(Part.makeCylinder(2.5, 20, Vector(50, 30, -5)))
     save("boss", plate, ["prot"], 7, PLATE_VOL - math.pi * 6.25 * 3,
          "boss removed, screw hole through the plate stays",
-         base=base, kinds=[("boss", lambda f: True)])
+         base=base, kinds=[("boss", lambda f: True)],
+         generic_rules=["boss"])
 
 
 def gen_emboss():
@@ -204,7 +212,8 @@ def gen_emboss():
     plate = plate.cut(Part.makeBox(20, 3, 0.4, Vector(60, 42, 2.6))).removeSplitter()
     save("emboss", plate, ["prot", "recess"], 6, PLATE_VOL,
          "raised + engraved emboss -> plain plate",
-         base=flat_plate(), kinds=[("emboss", lambda f: True)])
+         base=flat_plate(), kinds=[("emboss", lambda f: True)],
+         generic_rules=["logo"])
 
 
 def gen_rib_network():
@@ -220,7 +229,8 @@ def gen_rib_network():
     shape = shape.removeSplitter()
     save("rib_network", shape, ["prot"], 6, 120 * 80 * 2.5,
          "crossing ribs form one connected feature -> plain plate",
-         base=Part.makeBox(120, 80, 2.5), kinds=[("rib", lambda f: True)])
+         base=Part.makeBox(120, 80, 2.5), kinds=[("rib", lambda f: True)],
+         generic_rules=["rib"])
 
 
 def gen_near_edge():
@@ -245,9 +255,80 @@ def gen_fail_demo():
          expect_failure=True, base=plate)
 
 
+FONT_DIR, FONT_FILE = "/System/Library/Fonts/Supplemental", "Arial Bold.ttf"
+
+
+def text_prism(text, height, z0, z1, x0=20.0, y0=22.0):
+    """Solid letters (with their counters) between z0 and z1, or None when the font is not available."""
+    if not os.path.exists(os.path.join(FONT_DIR, FONT_FILE)):
+        return None
+    glyphs = Part.makeWireString(text, FONT_DIR + "/", FONT_FILE, height, 0)
+    solids = []
+    for wires in glyphs:
+        if not wires:                      # a space has no outline
+            continue
+        face = Part.makeFace(wires, "Part::FaceMakerBullseye")
+        solids.append(face.extrude(Vector(0, 0, z1 - z0)))
+    shape = solids[0]
+    for s in solids[1:]:
+        shape = shape.fuse(s)
+    shape.translate(Vector(x0, y0, z0))
+    return shape
+
+
+def gen_logo_engrave():
+    text = text_prism("X01 ABS", 8, 2.7, 3.2)
+    if text is None:
+        print("GEN logo_engrave skipped: no font")
+        return
+    plate = flat_plate().cut(text).removeSplitter()
+    save("logo_engrave", plate, ["logo"], 6, PLATE_VOL, "text engraved 0.3 mm deep -> plain plate",
+         base=flat_plate(), kinds=[("logo", lambda f: True)],
+         generic_rules=["logo"])
+
+
+def gen_logo_emboss():
+    text = text_prism("X01 ABS", 8, 3.0, 3.3)
+    if text is None:
+        print("GEN logo_emboss skipped: no font")
+        return
+    plate = flat_plate().fuse(text).removeSplitter()
+    save("logo_emboss", plate, ["logo"], 6, PLATE_VOL, "text raised 0.3 mm -> plain plate",
+         base=flat_plate(), kinds=[("logo", lambda f: True)],
+         generic_rules=["logo"])
+
+
+def gen_logo_through_text():
+    text = text_prism("X01 ABS", 8, -1.0, 4.0)
+    if text is None:
+        print("GEN logo_through_text skipped: no font")
+        return
+    plate = flat_plate().cut(text).removeSplitter()
+    # stencil-like letters cut through the plate are a cut-out, not a logo: must stay as they are
+    save("logo_through_text", plate, ["logo"], len(plate.Faces), plate.Volume,
+         "text cut through the plate (not a logo) -> unchanged", base=plate)
+
+
+def gen_pocket():
+    plate = flat_plate().cut(Part.makeBox(20, 12, 1.5, Vector(40, 24, 1.5)))
+    # a blind functional pocket, not a marking: must stay as it is
+    save("pocket", plate, ["logo"], len(plate.Faces), plate.Volume,
+         "blind rectangular pocket 20x12x1.5 (not a logo) -> unchanged", base=plate)
+
+
+def gen_large_features():
+    plate = Part.makeBox(120, 80, 3)
+    plate = plate.fuse(Part.makeBox(30, 30, 8, Vector(10, 10, 3)))                  # thick block, not a rib
+    plate = plate.fuse(Part.makeCylinder(20, 10, Vector(85, 40, 3))).removeSplitter()   # diameter 40, not a boss
+    save("large_features", plate, ["rib", "boss"], len(plate.Faces), plate.Volume,
+         "thick block and a 40 mm column (no rib, no boss) -> unchanged", base=plate,
+         generic_rules=["rib", "boss", "chamfer_edge", "logo"])
+
+
 def main():
     for gen in (gen_plate_hole_fillets, gen_curved_press, gen_ribbed, gen_chamfer,
-                gen_boss, gen_emboss, gen_rib_network, gen_near_edge, gen_fail_demo):
+                gen_boss, gen_emboss, gen_rib_network, gen_near_edge, gen_fail_demo,
+                gen_logo_engrave, gen_logo_emboss, gen_logo_through_text, gen_pocket, gen_large_features):
         gen()
     manifest_path = os.path.join(OUT, "manifest.json")
     json.dump(MANIFEST, open(manifest_path, "w"), indent=1)
