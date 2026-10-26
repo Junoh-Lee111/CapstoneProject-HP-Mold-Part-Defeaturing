@@ -1,6 +1,6 @@
 """Checks of the defeaturing timeout guard (headless).
 
-Run: FreeCADCmd src/test_timeout.py
+Run: FreeCADCmd src/validation/test_timeout.py
  1. a removal through the worker process works and equals the in-process result;
  2. a removal that never answers is cut off at the limit and reported as a timeout, and the next
     removal works again (the worker is restarted);
@@ -13,7 +13,10 @@ import time
 
 import Part
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../src
+for _p in (_SRC, os.path.join(_SRC, "engine")):                       # layers: engine/, rules/, ...
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 import cleancad_core as core
 
 V = core.FreeCAD.Vector

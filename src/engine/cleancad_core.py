@@ -179,7 +179,7 @@ def groups(shape, faces):
 # FreeCAD's defeaturing() is one blocking C++ call: on some real (free-form) geometry it never
 # returns, and neither a Python thread nor a forked child can interrupt it (OCCT's thread pool does
 # not survive fork). Headless runs therefore send each removal to a separate worker process
-# (src/defeature_worker.py, one long-lived FreeCAD instance) and kill it after DEFEATURE_TIMEOUT
+# (src/engine/defeature_worker.py, one long-lived FreeCAD instance) and kill it after DEFEATURE_TIMEOUT
 # seconds. A timeout (or a crash of the worker) is reported as an ordinary failure, so process()
 # skips that feature and carries on. In the GUI the call runs in-process without a limit.
 DEFEATURE_TIMEOUT = float(os.environ.get("CLEANCAD_DEFEATURE_TIMEOUT", "60"))   # seconds; 0 = off

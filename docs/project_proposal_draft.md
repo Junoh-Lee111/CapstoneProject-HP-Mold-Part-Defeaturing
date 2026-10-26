@@ -81,5 +81,5 @@ Finalized — see [docs/team_rnr.md](team_rnr.md) for the current sub-role break
 - [x] Confirm how to obtain sample CAD data from HP → resolved: HP's real CAD data is confidential and will not be provided; the team authors simple CAD shapes itself, supplemented by public datasets
 - [x] Finalize per-member R&R → see [docs/team_rnr.md](team_rnr.md)
 - [x] Write team ground rules → see [docs/Team2_Ground_Rules.docx](Team2_Ground_Rules.docx)
-- [x] Core mechanism prototype → `src/cleancad_core.py`, verified against 9 self-authored example shapes (9/9 pass, `src/run_headless.py`)
+- [x] Core mechanism prototype → `src/engine/cleancad_core.py`, verified against 9 self-authored example shapes (9/9 pass, `src/run_headless.py`)
 - [ ] Investigate 3D deep learning approaches for feature recognition (mesh-based vs. B-rep graph-based); pick the specific model (UV-Net/BRepNet/AAGNet/BrepMFR)

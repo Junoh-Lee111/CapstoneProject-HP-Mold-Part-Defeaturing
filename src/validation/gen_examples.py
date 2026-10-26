@@ -2,7 +2,7 @@
 (per FR-DATA-02/03: ~2-3mm thick, ~100-200mm, covering curved cut-out / ribbed / near-edge types,
 plus a few extra shapes exercising other feature categories and a deliberate failure case).
 
-Run headless: FreeCADCmd src/gen_examples.py
+Run headless: FreeCADCmd src/validation/gen_examples.py
 Writes STEP files + manifest.json (expected results) under $CLEANCAD_WORKDIR/samples/examples
 (default ~/Documents/CleanCAD_Workspace) - NOT into the repo.
 """
@@ -18,7 +18,10 @@ os.makedirs(OUT, exist_ok=True)
 
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../src
+for _p in (_SRC, os.path.join(_SRC, "engine")):                       # layers: engine/, rules/, ...
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 from cleancad_core import sig  # noqa: E402
 
 MANIFEST = []

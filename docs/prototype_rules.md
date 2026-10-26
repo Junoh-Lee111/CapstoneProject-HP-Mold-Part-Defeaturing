@@ -5,12 +5,12 @@
 > The real decision criteria (what to remove, which limits) are still open and come from HP / the team.
 > The formal requirements are in the consolidated FR/NFR/SA/DE document.
 
-Code: `src/` (run headless with FreeCAD: `freecadcmd src/<script>.py`). Test files and results are written to
+Code: `src/` (see `src/README.md` for the layers; run headless with FreeCAD: `freecadcmd src/validation/<script>.py`). Test files and results are written to
 `~/Documents/CleanCAD_Workspace/`, never into the repository.
 
 ## 1. How a rule works
 
-A rule decides which faces of a part are candidates for removal. `process()` in `src/cleancad_core.py` then
+A rule decides which faces of a part are candidates for removal. `process()` in `src/engine/cleancad_core.py` then
 groups connected candidate faces into features, removes each feature with FreeCAD `defeaturing()`, and checks
 the result (valid solid, shape actually changed). A removal that fails, times out or crashes is recorded as a
 failure and the original geometry is kept.
@@ -30,7 +30,7 @@ chamfer max. width 5 mm. These four are our own starting values.
 
 The code is organised the same way: one module per group in `src/rules/` (`holes.py`, `edges.py`,
 `protrusions.py`, `markings.py`); `cleancad_core.rules_by_category()` lists them. Shared geometry helpers are in
-`src/geom_utils.py`.
+`src/engine/geom_utils.py`.
 
 | Group | Rule | Selects | Source |
 |---|---|---|---|
