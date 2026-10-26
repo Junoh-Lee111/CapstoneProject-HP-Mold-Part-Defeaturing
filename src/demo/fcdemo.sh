@@ -1,5 +1,5 @@
 #!/bin/bash
-# Live FreeCAD demo of the CleanCAD prototype (see demo_freecad.py).
+# Live FreeCAD demo of the CleanCAD prototype (see demo_freecad.py in this folder).
 #
 # Usage:
 #   fcdemo.sh [--quit]                     all examples from manifest.json, one after another

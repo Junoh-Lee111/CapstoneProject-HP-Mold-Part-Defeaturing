@@ -1,6 +1,6 @@
 """Face-level evaluation of rule sets against generated ground truth.
 
-Run: FreeCADCmd src/gen_examples.py && FreeCADCmd src/evaluate_rules.py
+Run: FreeCADCmd src/validation/gen_examples.py && FreeCADCmd src/validation/evaluate_rules.py
 Reads manifest.json + <case>.truth.json (written by gen_examples.py) and, for each rule set,
 compares the faces the rules SELECT on the generated shape with the faces that must be removed.
 Writes $CLEANCAD_WORKDIR/logs/evaluation.md (nothing is written into the repo).
@@ -13,7 +13,10 @@ from collections import defaultdict
 
 import Part
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../src
+for _p in (_SRC, os.path.join(_SRC, "engine")):                       # layers: engine/, rules/, ...
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 import cleancad_core as core
 
 WORKDIR = os.environ.get("CLEANCAD_WORKDIR", os.path.expanduser("~/Documents/CleanCAD_Workspace"))

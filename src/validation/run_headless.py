@@ -1,6 +1,6 @@
 """Headless end-to-end check of every example in manifest.json against its expected result.
 
-Run: FreeCADCmd src/gen_examples.py && FreeCADCmd src/run_headless.py
+Run: FreeCADCmd src/validation/gen_examples.py && FreeCADCmd src/validation/run_headless.py
 Reads/writes only under $CLEANCAD_WORKDIR (default ~/Documents/CleanCAD_Workspace) - nothing in the repo.
 """
 import os
@@ -8,7 +8,10 @@ import sys
 import json
 import Part
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../src
+for _p in (_SRC, os.path.join(_SRC, "engine")):                       # layers: engine/, rules/, ...
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 import cleancad_core as core
 
 WORKDIR = os.environ.get("CLEANCAD_WORKDIR", os.path.expanduser("~/Documents/CleanCAD_Workspace"))

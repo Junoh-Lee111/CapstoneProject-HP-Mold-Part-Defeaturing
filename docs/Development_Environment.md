@@ -11,7 +11,7 @@ it's the Python interpreter *embedded inside FreeCAD itself*.
 
 | Context | Interpreter | Used by | External pip deps |
 |---|---|---|---|
-| CAD pipeline (M1, M5, current prototype) | FreeCAD's own embedded Python | `src/cleancad_core.py`, `gen_examples.py`, `run_headless.py`, `demo_freecad.py` | **None** — only `Part`, `FreeCAD`, `FreeCADGui`, `ImportGui`, `PySide` (all built into FreeCAD) + stdlib |
+| CAD pipeline (M1, M5, current prototype) | FreeCAD's own embedded Python | `src/engine/cleancad_core.py`, `gen_examples.py`, `run_headless.py`, `demo_freecad.py` | **None** — only `Part`, `FreeCAD`, `FreeCADGui`, `ImportGui`, `PySide` (all built into FreeCAD) + stdlib |
 | ML / graph / docs tooling | System Python 3 | future `M2`–`M4` (graph conversion, GNN), and one-off doc/report generation scripts | project-specific (see §5) |
 
 This split matters: running `src/*.py` with your system `python3` will fail (`ModuleNotFoundError: No module
@@ -48,8 +48,8 @@ alias FreeCADCmd="/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd"
 
 ```bash
 cd CapstoneProject-HP-Mold-Part-Defeaturing
-/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd src/gen_examples.py
-/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd src/run_headless.py
+/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd src/validation/gen_examples.py
+/Applications/FreeCAD.app/Contents/Resources/bin/freecadcmd src/validation/run_headless.py
 ```
 
 Output (STEP files, `manifest.json`, `logs/report.md`) is written to `$CLEANCAD_WORKDIR` (default
@@ -58,8 +58,8 @@ Output (STEP files, `manifest.json`, `logs/report.md`) is written to `$CLEANCAD_
 ### Running the live GUI demo
 
 ```bash
-src/fcdemo.sh --quit          # all example shapes
-src/fcdemo.sh near_edge,ribbed  # only these examples
+src/demo/fcdemo.sh --quit          # all example shapes
+src/demo/fcdemo.sh near_edge,ribbed  # only these examples
 ```
 
 `fcdemo.sh` launches the full FreeCAD GUI app (`FREECAD_APP`, default `/Applications/FreeCAD.app`) and drives

@@ -9,7 +9,10 @@ import sys
 
 import Part
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../src
+for _p in (_SRC, os.path.join(_SRC, "engine")):                       # layers: engine/, rules/, ...
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 import cleancad_core as core  # noqa: E402
 from geom_utils import Topo, stype, flatten, sweep, outward_normal, same_cyl, connected, angle_deg, SIZE_TOL, TWO_PI, GEOM_TOL  # noqa: E402,F401
 

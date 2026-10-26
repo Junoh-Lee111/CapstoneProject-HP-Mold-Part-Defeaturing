@@ -2,7 +2,7 @@
 CleanCAD pipeline and compare with a reference result.
 
 Run: REF_IN=a.stp REF_OUT=out.step [REF_REF=ref.stp] [CLEANCAD_PROFILE=hp_example|keep_fasteners] \
-     freecadcmd src/run_ref.py
+     freecadcmd src/validation/run_ref.py
 """
 import os
 import sys
@@ -11,7 +11,10 @@ from collections import Counter
 
 import Part
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../src
+for _p in (_SRC, os.path.join(_SRC, "engine")):                       # layers: engine/, rules/, ...
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 import cleancad_core as core
 
 RULES = ["ref_holes", "ref_fillets", "ref_protrusions"]

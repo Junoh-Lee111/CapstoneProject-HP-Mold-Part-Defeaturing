@@ -1,7 +1,7 @@
 """Worker process for cleancad_core: runs FreeCAD's defeaturing() on request, so that the caller can
 give up (and kill this process) when the CAD kernel hangs.
 
-Started by cleancad_core as `freecadcmd src/defeature_worker.py` with CLEANCAD_WORKER_DIR set.
+Started by cleancad_core as `freecadcmd src/engine/defeature_worker.py` with CLEANCAD_WORKER_DIR set.
 Protocol (files in that directory, written atomically by rename):
   req<N>.brep + req<N>.json {"faces": [indices into shape.Faces], "delay": seconds (tests only),
                               "op": "cut" (optional; then req<N>.tool.brep is cut away instead)}

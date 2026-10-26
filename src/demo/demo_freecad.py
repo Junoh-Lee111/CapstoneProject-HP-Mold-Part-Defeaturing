@@ -21,7 +21,10 @@ import ImportGui
 from PySide import QtCore, QtGui, QtWidgets
 
 WORKDIR = os.environ.get("CLEANCAD_WORKDIR", os.path.expanduser("~/Documents/CleanCAD_Workspace"))
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../src
+for _p in (_SRC, os.path.join(_SRC, "engine")):                       # layers: engine/, rules/, ...
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 import cleancad_core as core
 
 DELAY_MS = int(os.environ.get("CLEANCAD_DELAY_MS", "1200"))
