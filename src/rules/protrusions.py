@@ -1,63 +1,130 @@
-"""Rules for straight ribs, bosses and chamfers, registered in the CleanCAD pipeline.
+"""PROTRUSIONS: things that stand up from a flat face - ribs, bosses and repeated rounded bumps.
 
-Generic geometry, not tied to the shape of the test parts (no fixed base height):
-
-PROTRUSIONS (rules "rib" and "boss")
-  Start at the inner wires of a planar host face (the footprint of whatever stands on it). Collect the
-  faces that stand on the outer side of the host plane, reached from the wire by edge adjacency; faces that
-  reach below the host plane (the plate itself, a hole that also runs through the plate) never belong.
-  The footprint decides what it is:
-    boss  - the footprint is a circle (a column) up to profile "boss_max_diameter";
-    rib   - a thin footprint (mean thickness 2*area/perimeter <= profile "rib_max_thickness") that is
-            at least 3 thicknesses long;
-  Anything lower than the logo depth cap (profile "logo_max_depth") is a marking and left to the logo rule;
-  other shapes are not selected.
-  Ribs that touch the EDGE of the host (so that the host has no inner wire for them, as on cut-out
-  samples) are found from the host's outer wire: every connected group of faces standing on the outer
-  side of the host plane is a candidate and is taken for a rib when its footprint box is thin
-  (<= "rib_max_thickness") and at least twice as long as wide.
-CHAMFERS (rule "chamfer_edge")
-  A narrow face between two faces that it meets at 25-65 degrees, where those two faces are about a right
-  angle apart (a chamfer or countersink replaces a 90 degree edge); width <= profile "chamfer_size".
-The limits are starting values, not validated criteria.
-"""
+Rules: ref_protrusions (port of the HP mentor's example: rounded, elongated patches that occur at least
+twice with the same shape), rib (thin and long, also over a gentle bend and at the edge of a part) and boss
+(a round column up to profile "boss_max_diameter"). Fallback: when defeaturing() cannot remove one, the
+prism standing on its host plane is cut away."""
 import math
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import cleancad_core as core  # noqa: E402
-from geom_utils import Topo, stype, face_points  # noqa: E402
-from logo_rules import is_circle_wire, plane_frame, box2d  # noqa: E402
+import Part
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import cleancad_core as core  # noqa: E402
+from collections import Counter  # noqa: E402
+
+from geom_utils import (Topo, stype, flatten, face_points, plane_frame, box2d, is_circle_wire,  # noqa: E402,F401
+                        angle_deg, owners_index, connected, GEOM_TOL, TWO_PI)
+
+# --- HP-example style repeated protrusions
+MIN_SUPPORT_AREA = 500.0
+MAX_WALL = 5.0
+MAX_PATCH_FACES = 60
+MIN_ELONG = 1.5
+MATCH_REL, MATCH_ABS = 0.02, 0.05
+
+# --- our rib / boss recognition
 MIN_HOST_AREA = 50.0
 BELOW_TOL = 0.1            # mm: a face may dip this far below the host plane (root blends) and still stand on it
 RIB_MIN_LENGTH_FACTOR = 3.0
 EDGE_RIB_LENGTH_FACTOR = 2.0
 EDGE_RIB_MAX_HEIGHT = 3.0    # mm: a taller group at the edge is structure (a wall, a flange), not a rib
 MIN_EDGE_RIB_FACES = 3       # a rib is more than one sliver face
-CHAMFER_ANGLE = (25.0, 65.0)
-CHAMFER_RIGHT_ANGLE = (65.0, 115.0)
-MIN_CHAMFER_WIDTH = 0.1
+BENT_MAX_HEIGHT = 3.0   # mm: height limit for the part of a rib that lies on a bent-away neighbour host
+BEND_ANGLE = 20.0       # degrees: flat faces this close in direction count as one gently bent host
 
 
-def _owners_index(topo):
-    index = {}
-    for e, owners in topo.edges:
-        index.setdefault(e.hashCode(), []).append((e, owners))
+def plane_normal(f):
+    n = f.Surface.Axis
+    return -n if f.Orientation == "Reversed" else n
 
-    def owners_of(edge):
-        for e, owners in index.get(edge.hashCode(), []):
-            if e.isSame(edge):
-                return owners
-        return set()
-    return owners_of
+
+def surf_radius(f):
+    k = stype(f)
+    return (f.Surface.Radius if k in ("Cylinder", "Sphere") else
+            f.Surface.MinorRadius if k == "Toroid" else 0.0)
+
+
+def patch_descriptor(group, support, t):
+    kinds = Counter(stype(t.faces[i]) for i in group)
+    if kinds["Cylinder"] == 0 or (kinds["Sphere"] < 2 and kinds["Toroid"] < 2):
+        return None
+    if any(k not in ("Plane", "Cylinder", "Sphere", "Toroid") for k in kinds):
+        return None
+    normal = plane_normal(t.faces[support])
+    cyls = [i for i in group if stype(t.faces[i]) == "Cylinder"
+            and abs(normal.dot(t.faces[i].Surface.Axis)) < 1e-6 and sweep(t.faces[i]) < TWO_PI - 1e-5]
+    if not cyls:
+        return None
+    main = max(cyls, key=lambda i: t.area[i])
+    along = t.faces[main].Surface.Axis
+    across = normal.cross(along)
+    across.normalize()
+    pts = [p for i in group for p in face_points(t.faces[i])]
+    if not pts:
+        return None
+    origin = t.faces[support].Surface.Position
+    proj = [[(p - origin).dot(d) for p in pts] for d in (along, across, normal)]
+    ext = [max(v) - min(v) for v in proj]
+    length, width = sorted(ext[:2], reverse=True)
+    height = max(proj[2])
+    if (width <= GEOM_TOL or length / width < MIN_ELONG or height <= MATCH_ABS
+            or min(proj[2]) < -MAX_WALL - MATCH_ABS):
+        return None
+    entries = sorted((stype(t.faces[i]), t.area[i], surf_radius(t.faces[i])) for i in group)
+    return {"indices": sorted(group), "support": support, "dims": [length, width, ext[2]],
+            "surfaces": entries}
+
+
+def close(x, y):
+    return abs(x - y) <= max(MATCH_ABS, MATCH_REL * max(abs(x), abs(y)))
+
+
+def descriptors_match(a, b):
+    if len(a["surfaces"]) != len(b["surfaces"]):
+        return False
+    if not all(close(x, y) for x, y in zip(a["dims"], b["dims"])):
+        return False
+    return all(ka == kb and close(aa, ab) and close(ra, rb)
+               for (ka, aa, ra), (kb, ab, rb) in zip(a["surfaces"], b["surfaces"]))
+
+
+def protrusion_families(shape):
+    t = Topo(shape)
+    supports = [i for i, f in enumerate(t.faces) if stype(f) == "Plane" and t.area[i] >= MIN_SUPPORT_AREA]
+    patches, seen = [], set()
+    for s in sorted(supports, key=lambda i: t.area[i], reverse=True):
+        sp = t.faces[s].Surface
+        d = sp.Axis
+        barriers = {i for i in supports
+                    if abs(d.dot(t.faces[i].Surface.Axis)) > 1 - 1e-7
+                    and abs((t.faces[i].Surface.Position - sp.Position).dot(d)) <= MAX_WALL}
+        for grp in connected(set(range(len(t.faces))) - barriers, t.nb):
+            ident = frozenset(grp)
+            if (ident in seen or len(grp) > MAX_PATCH_FACES
+                    or not any(s in t.nb[i] for i in grp)
+                    or sum(t.area[i] for i in grp) > t.area[s] / 2):
+                continue
+            desc = patch_descriptor(grp, s, t)
+            if desc is not None:
+                seen.add(ident)
+                patches.append(desc)
+    fams = []
+    for p in patches:
+        fam = next((f for f in fams if f[0]["support"] == p["support"] and descriptors_match(f[0], p)), None)
+        if fam is None:
+            fams.append([p])
+        else:
+            fam.append(p)
+    fams = [f for f in fams if len(f) >= 2]
+    return t, fams
 
 
 def protrusion_bundles(shape):
     """-> (topo, [{"kind": "rib"|"boss", "host": i, "faces": [...], "height": h, "thickness": t}])"""
     t = Topo(shape)
-    owners_of = _owners_index(t)
+    owners_of = owners_index(t)
     prof = core.PROFILE
     logo_cap = prof.get("logo_max_depth") or 0.0
     boss_max = prof.get("boss_max_diameter", 20.0)
@@ -185,8 +252,8 @@ def protrusion_bundles(shape):
     return t, out
 
 
-BENT_MAX_HEIGHT = 3.0   # mm: height limit for the part of a rib that lies on a bent-away neighbour host
-BEND_ANGLE = 20.0   # degrees: flat faces this close in direction count as one gently bent host
+def _above(hs):
+    return bool(hs) and min(hs) >= -BELOW_TOL and max(hs) > BELOW_TOL
 
 
 def _bent_hosts(t, h):
@@ -204,14 +271,10 @@ def _bent_hosts(t, h):
         x = stack.pop()
         for y in t.nb[x]:
             if (y not in found and t.plane(y) is not None and t.area[y] >= MIN_HOST_AREA
-                    and _angle(normal(x), normal(y)) <= BEND_ANGLE):
+                    and angle_deg(normal(x), normal(y)) <= BEND_ANGLE):
                 found.add(y)
                 stack.append(y)
     return found
-
-
-def _above(hs):
-    return bool(hs) and min(hs) >= -BELOW_TOL and max(hs) > BELOW_TOL
 
 
 @core.removal_fallback
@@ -237,65 +300,19 @@ def cut_protrusion(shape, group):
     return None
 
 
-def _angle(a, b):
-    d = max(-1.0, min(1.0, a.dot(b)))
-    return math.degrees(math.acos(d))
+@core.set_rule("ref_protrusions", batch="only", category="protrusions")
+def _protrusions(shape):
+    t, fams = protrusion_families(shape)
+    return [t.faces[i] for fam in fams for p in fam for i in p["indices"]]
 
 
-def _edge_normals(face_a, face_b, edge):
-    try:
-        p = edge.valueAt((edge.FirstParameter + edge.LastParameter) / 2)
-        na = face_a.normalAt(*face_a.Surface.parameter(p))
-        nb = face_b.normalAt(*face_b.Surface.parameter(p))
-        return na, nb
-    except Exception:                       # noqa: BLE001
-        return None
-
-
-def chamfer_faces(shape):
-    t = Topo(shape)
-    limit = core.PROFILE.get("chamfer_size", 5.0)
-    picked = []
-    for i, f in enumerate(t.faces):
-        shared = {}                         # neighbour -> (total shared edge length, one edge)
-        for e, owners in t.edges:
-            if i in owners and len(owners) == 2:
-                j = next(iter(owners - {i}))
-                total, _ = shared.get(j, (0.0, None))
-                shared[j] = (total + e.Length, e)
-        if len(shared) < 2:
-            continue
-        (j1, (l1, e1)), (j2, (l2, e2)) = sorted(shared.items(), key=lambda kv: -kv[1][0])[:2]
-        width = t.area[i] / max((l1 + l2) / 2, 1e-9)
-        if not (MIN_CHAMFER_WIDTH <= width <= limit):
-            continue
-        n1 = _edge_normals(f, t.faces[j1], e1)
-        n2 = _edge_normals(f, t.faces[j2], e2)
-        if not n1 or not n2:
-            continue
-        a1, a2 = _angle(*n1), _angle(*n2)
-        # the two faces on either side, compared where they meet the chamfer
-        between = _angle(n1[1], n2[1])
-        if (CHAMFER_ANGLE[0] <= a1 <= CHAMFER_ANGLE[1] and CHAMFER_ANGLE[0] <= a2 <= CHAMFER_ANGLE[1]
-                and CHAMFER_RIGHT_ANGLE[0] <= between <= CHAMFER_RIGHT_ANGLE[1]
-                and abs(a1 + a2 - between) <= 15.0):
-            picked.append(i)
-    return t, picked
-
-
-@core.set_rule("rib")
+@core.set_rule("rib", category="protrusions")
 def _rib(shape):
     t, bundles = protrusion_bundles(shape)
     return [t.faces[i] for i in sorted({i for b in bundles if b["kind"] == "rib" for i in b["faces"]})]
 
 
-@core.set_rule("boss")
+@core.set_rule("boss", category="protrusions")
 def _boss(shape):
     t, bundles = protrusion_bundles(shape)
     return [t.faces[i] for i in sorted({i for b in bundles if b["kind"] == "boss" for i in b["faces"]})]
-
-
-@core.set_rule("chamfer_edge")
-def _chamfer_edge(shape):
-    t, picked = chamfer_faces(shape)
-    return [t.faces[i] for i in picked]

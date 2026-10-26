@@ -23,6 +23,7 @@ import Part
 MAX_SMALL_RADIUS = 5.0
 RULES = {}
 SET_RULES = {}   # name -> fn(shape) -> list of faces (rules that need the whole shape, e.g. hole groups)
+CATEGORY = {}    # rule name -> what it recognises: holes / edges / protrusions / markings / scaffolding
 BATCH = {}       # name -> "try" | "only": remove ALL faces the rule selects in one operation
 #                  ("try": fall back to per-feature removal on failure; "only": all-or-nothing)
 
@@ -47,18 +48,28 @@ def set_profile(name):
     PROFILE.update(PROFILES[name])
 
 
-def rule(name):
+def rule(name, category="scaffolding"):
     def deco(fn):
         RULES[name] = fn
+        CATEGORY[name] = category
         return fn
     return deco
 
 
-def set_rule(name, batch=None):
+def rules_by_category():
+    """{category: [rule names]} - the rules grouped by what they recognise."""
+    out = {}
+    for name in RULES:
+        out.setdefault(CATEGORY.get(name, "other"), []).append(name)
+    return out
+
+
+def set_rule(name, batch=None, category="other"):
     """Register a rule that selects faces by looking at the whole shape. It is exposed in RULES as
     a per-face predicate too (membership in the selection), so select()/the demo need no changes."""
     def deco(fn):
         SET_RULES[name] = fn
+        CATEGORY[name] = category
         if batch:
             BATCH[name] = batch
         RULES[name] = lambda f, c: sig(f) in c.picked(name)
@@ -409,6 +420,4 @@ def process(shape, rule_names):
     return current, removed, failures
 
 
-import ref_rules  # noqa: E402,F401  (registers ref_holes / ref_fillets / ref_protrusions)
-import logo_rules  # noqa: E402,F401  (registers logo)
-import feature_rules  # noqa: E402,F401  (registers rib, boss, chamfer_edge)
+import rules  # noqa: E402,F401  (registers every rule: holes, edges, protrusions, markings)

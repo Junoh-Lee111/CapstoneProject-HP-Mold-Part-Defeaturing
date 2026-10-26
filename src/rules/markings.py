@@ -1,49 +1,32 @@
-"""Logo / marking (engraving and emboss) recognition, registered in the CleanCAD pipeline as "logo".
+"""MARKINGS: logos, text and other marks engraved into or raised from a flat face.
 
-Geometric and topological heuristic from the HP mentor's rule description (no image, no OCR):
- 1. Hosts are planar faces; the starting points are the INNER WIRES of a host. An inner wire that is a
-    single circle is an ordinary hole and is skipped - unless the host has several inner wires and
-    more than one of them is non-circular (a multi-glyph structure: the circles are letters like O, 0).
+Rule: logo - geometric / topological heuristic from the HP mentor's rule description (no image, no OCR):
+ 1. Hosts are flat faces; the starting points are the INNER WIRES of a host. A wire that is a single circle is
+    an ordinary hole and is skipped - unless the host has several inner wires and more than one of them is
+    non-circular (a multi-glyph structure: the circles are letters like O, 0).
  2. From the faces next to a wire, follow the edge adjacency for at most 3 steps through SHALLOW faces:
     smaller than 20 % of the host and not deeper (along the host normal) than 0.35 x the wire size.
  3. (our addition) the depth may also not exceed the profile value "logo_max_depth", if set.
  4. A bundle whose total area exceeds 25 % of the host is not a logo.
- 5. A wire that has a matching inner boundary on a facing, antiparallel planar face is a through
-    slot / cut, not a logo, and is skipped.
-All faces of an accepted bundle (walls, floors, tops of every glyph part) are selected for removal.
-The limits are parameters of that description, not validated general criteria.
-"""
+ 5. A wire that has a matching inner boundary on a facing, antiparallel flat face is a through slot / cut.
+Fallback: on surface models (shells, no solid) a logo is removed by re-making the host face without the
+holes the logo cut. The limits are parameters of that description, not validated general criteria."""
 import math
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import cleancad_core as core  # noqa: E402
-from geom_utils import Topo, stype, plane_frame  # noqa: E402,F401
+import Part
 
-MIN_HOST_AREA = 20.0        # mm2: smaller planar faces are not logo hosts
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import cleancad_core as core  # noqa: E402
+from geom_utils import Topo, stype, plane_frame, box2d, is_circle_wire  # noqa: E402,F401
+
+MIN_HOST_AREA = 20.0        # mm2: smaller flat faces are not logo hosts
 MAX_FACE_FRACTION = 0.20    # a bundle face must be smaller than this part of the host area
 MAX_BUNDLE_FRACTION = 0.25  # the whole bundle must be smaller than this part of the host area
 DEPTH_FACTOR = 0.35         # depth <= factor * size of the wire
 MAX_HOPS = 3
-# Our own addition to the mentor's description (confirm with HP): marks are shallow in absolute terms
-# (HP's samples: 0.15 mm), a blind pocket of 1.5 mm is not. Set profile "logo_max_depth" to None to switch off.
 OVERLAP = 0.5               # facing inner wire counts as "the same" when its box overlaps this much
-
-
-def is_circle_wire(wire):
-    edges = wire.Edges
-    if not edges or any(type(e.Curve).__name__ != "Circle" for e in edges):
-        return False
-    c0 = edges[0].Curve
-    return all(abs(e.Curve.Radius - c0.Radius) < 1e-6 and (e.Curve.Center - c0.Center).Length < 1e-6
-               for e in edges)
-
-
-def box2d(points, u, v):
-    us = [p.dot(u) for p in points]
-    vs = [p.dot(v) for p in points]
-    return min(us), max(us), min(vs), max(vs)
 
 
 def overlap_ratio(a, b):
@@ -130,7 +113,7 @@ def logo_bundles(shape):
     return t, bundles
 
 
-@core.set_rule("logo", batch="try")
+@core.set_rule("logo", batch="try", category="markings")
 def _logo(shape):
     t, bundles = logo_bundles(shape)
     chosen = sorted({i for b in bundles for i in b["faces"]})

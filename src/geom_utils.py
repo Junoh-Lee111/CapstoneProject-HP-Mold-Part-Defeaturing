@@ -93,3 +93,91 @@ def face_points(f):
                 except Exception:
                     pass
     return pts
+
+SIZE_TOL = 1e-7
+TWO_PI = 2 * math.pi
+
+
+def sweep(f):
+    u0, u1, _, _ = urange(f)
+    return u1 - u0
+
+
+def outward_normal(f, p):
+    u, v = f.Surface.parameter(p)
+    return f.normalAt(u, v)
+
+
+def inward_cylinder(f):
+    """True for a hole wall (material outside the bore): normal points to the axis."""
+    s = f.Surface
+    u0, u1, v0, v1 = urange(f)
+    p = f.valueAt((u0 + u1) / 2, (v0 + v1) / 2)
+    n = f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+    axis = s.Axis
+    d = p - s.Center
+    radial = d - axis * d.dot(axis)
+    return n.dot(radial) < 0
+
+
+def same_cyl(a, b):
+    sa, sb = a.Surface, b.Surface
+    if abs(sa.Radius - sb.Radius) > GEOM_TOL:
+        return False
+    if sa.Axis.cross(sb.Axis).Length > 1e-7:
+        return False
+    return (sb.Center - sa.Center).cross(sa.Axis).Length <= GEOM_TOL
+
+
+def connected(indices, nb):
+    rem = set(indices)
+    while rem:
+        seed = rem.pop()
+        grp, stack = {seed}, [seed]
+        while stack:
+            for o in nb[stack.pop()] & rem:
+                rem.remove(o)
+                grp.add(o)
+                stack.append(o)
+        yield grp
+
+
+def is_circle_wire(wire):
+    edges = wire.Edges
+    if not edges or any(type(e.Curve).__name__ != "Circle" for e in edges):
+        return False
+    c0 = edges[0].Curve
+    return all(abs(e.Curve.Radius - c0.Radius) < 1e-6 and (e.Curve.Center - c0.Center).Length < 1e-6
+               for e in edges)
+
+
+def box2d(points, u, v):
+    us = [p.dot(u) for p in points]
+    vs = [p.dot(v) for p in points]
+    return min(us), max(us), min(vs), max(vs)
+
+
+def flatten(groups):
+    """A list of face groups as one list of faces."""
+    return [f for g in groups for f in g]
+
+
+def angle_deg(a, b):
+    """Angle between two unit vectors, in degrees."""
+    d = max(-1.0, min(1.0, a.dot(b)))
+    return math.degrees(math.acos(d))
+
+
+def owners_index(topo):
+    """Edge -> the set of face indices that share it, found by the edge's hash then identity."""
+    index = {}
+    for e, owners in topo.edges:
+        index.setdefault(e.hashCode(), []).append((e, owners))
+
+    def owners_of(edge):
+        for e, owners in index.get(edge.hashCode(), []):
+            if e.isSame(edge):
+                return owners
+        return set()
+    return owners_of
+
