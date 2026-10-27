@@ -18,7 +18,7 @@ import cleancad_core as core  # noqa: E402
 from collections import Counter  # noqa: E402
 
 from geom_utils import (Topo, stype, flatten, face_points, plane_frame, box2d, is_circle_wire,  # noqa: E402,F401
-                        angle_deg, owners_index, connected, GEOM_TOL, TWO_PI)
+                        angle_deg, owners_index, connected, inward_cylinder, sweep, GEOM_TOL, TWO_PI)
 
 # --- HP-example style repeated protrusions
 MIN_SUPPORT_AREA = 500.0
@@ -139,6 +139,16 @@ def protrusion_bundles(shape):
             pts_cache[i] = face_points(t.faces[i])
         return pts_cache[i]
 
+    bores = {}
+
+    def bore_wall(i):
+        """A complete round hole wall. A hole is never part of a boss or a rib: the hole rules decide on it
+        (a boss keeps the hole that runs through it)."""
+        if i not in bores:
+            f = t.faces[i]
+            bores[i] = stype(f) == "Cylinder" and sweep(f) >= TWO_PI - 1e-5 and inward_cylinder(f)
+        return bores[i]
+
     out = []
     for h, host in enumerate(t.faces):
         if t.plane(h) is None or t.area[h] < MIN_HOST_AREA:
@@ -157,7 +167,7 @@ def protrusion_bundles(shape):
             while frontier:
                 nxt = set()
                 for f in frontier:
-                    if f in bundle or f == h:
+                    if f in bundle or f == h or bore_wall(f):
                         continue
                     hs = heights(f)
                     if not hs or min(hs) < -BELOW_TOL:
@@ -234,7 +244,7 @@ def protrusion_bundles(shape):
             while stack:
                 x = stack.pop()
                 for y in t.nb[x]:
-                    if y in near or y in comp or y in taken:
+                    if y in near or y in comp or y in taken or bore_wall(y):
                         continue
                     s_y = support(y, sup[x])
                     if s_y is not None:

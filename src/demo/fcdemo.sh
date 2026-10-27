@@ -4,7 +4,7 @@
 # Usage:
 #   fcdemo.sh [--quit]                     all examples from manifest.json, one after another
 #   fcdemo.sh [--quit] name1,name2         only those examples
-#   fcdemo.sh [--quit] file.step [rules]   a single file, rules comma-separated (default: cyl)
+#   fcdemo.sh [--quit] file.step|file.stp [rules]   a single file, rules comma-separated (default: cyl)
 #
 # Env:
 #   CLEANCAD_WORKDIR    where results/logs/snapshots go (default: ~/Documents/CleanCAD_Workspace)
@@ -20,7 +20,8 @@ if [ "${1:-}" = "--quit" ]; then
   shift
 fi
 
-if [[ "${1:-}" == *.step ]]; then
+case "${1:-}" in *.step|*.stp|*.STEP|*.STP) IS_FILE=1 ;; *) IS_FILE=0 ;; esac
+if [ "$IS_FILE" = 1 ]; then
   export CLEANCAD_INPUT="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
   export CLEANCAD_RULE="${2:-cyl}"
 elif [ -n "${1:-}" ]; then
