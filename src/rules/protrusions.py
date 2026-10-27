@@ -413,6 +413,7 @@ def _restart(wire, vertex):
     return Part.Wire(edges[k:] + edges[:k])
 
 
+SQUARE_OVERLAP = 1.0    # how far neighbouring rib boxes reach into each other
 SQUARE_EMBED = 0.5      # the box reaches this far into the host so that it fuses with it
 
 
@@ -455,6 +456,13 @@ def squarize_rib(shape, group):
         return box
 
     boxes = [make_box(sg) for sg in segs]
+    boxes = [make_box(sg) for sg in segs]
+    # boxes of neighbouring segments overlap a little at the bend, so that no notch is left between them
+    for i, sg in enumerate(segs):
+        for j in range(len(segs)):
+            if j != i and boxes[i].distToShape(boxes[j])[0] <= 1.0:
+                towards = (segs[j]["mid"] - sg["mid"]).dot(sg["d"])
+                sg["a"][1 if towards > 0 else 0] += SQUARE_OVERLAP if towards > 0 else -SQUARE_OVERLAP
     boxes = [make_box(sg) for sg in segs]
     bridges = []
     # Neighbouring segments of one rib sit on hosts at a slight angle to each other, so their boxes meet at the
