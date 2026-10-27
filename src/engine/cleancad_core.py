@@ -318,7 +318,41 @@ def _attempt(shape, group, timeout, delay=0, tool=None):
     return "ok", new_shape, _judge(group, new_shape)
 
 
+SPLIT_MAX_SECONDS = 150.0         # one face-by-face attempt may take this long in all
+SPLIT_FACE_TIMEOUT = 10.0         # and this long for a single face
+MAX_VOLUME_CHANGE = 0.20          # one removal that changes the volume by more than this is a broken result
 SPLIT_MAX_VOLUME_CHANGE = 0.01   # a single face removal may change the volume by at most this fraction
+
+
+LOCAL_MIN_FACES = 60              # from this many faces on, a face is removed in a small piece of the shape
+LOCAL_MARGIN = 3.0                # mm of the shape kept around the face in that piece
+
+
+def _attempt_local(shape, face, timeout):
+    """Remove ONE face in a small piece of the shape: cut a box around it out of the shape, defeature the
+    piece (fast, it has few faces) and fuse it back. defeaturing() on a 100-face free-form model takes 10-30 s
+    per face because it works on the whole shape; on the piece it takes a fraction of a second.
+    -> like _attempt(); falls back to the whole shape when the piece can not be made."""
+    b = face.BoundBox
+    m = max(LOCAL_MARGIN, 0.5 * max(b.XLength, b.YLength, b.ZLength))
+    try:
+        box = Part.makeBox(b.XLength + 2 * m, b.YLength + 2 * m, b.ZLength + 2 * m,
+                           FreeCAD.Vector(b.XMin - m, b.YMin - m, b.ZMin - m))
+        local = shape.common(box)
+        target = next((f for f in local.Faces if sig(f) == sig(face)), None)
+        if len(local.Solids) != 1 or target is None or not local.isValid():
+            raise ValueError("no usable piece")
+        state, new_local, res = _attempt(local, [target], timeout)
+        if state != "ok":
+            return state, None, res
+        if not res["valid"] or len(new_local.Faces) >= len(local.Faces):
+            return "ok", shape, {"faces": len(shape.Faces), "volume": shape.Volume, "valid": True, "gone": [False]}
+        new = shape.cut(box).fuse(new_local).removeSplitter()
+        left = {sig(f) for f in new.Faces}
+        return "ok", new, {"faces": len(new.Faces), "volume": new.Volume, "valid": new.isValid(),
+                           "gone": [sig(face) not in left]}
+    except Exception:                                       # noqa: BLE001
+        return _attempt(shape, [face], timeout)
 
 
 def _face_by_face(shape, group, timeout):
@@ -328,12 +362,18 @@ def _face_by_face(shape, group, timeout):
     wanted = [sig(f) for f in sorted(group, key=lambda f: -f.Area)]
     original = [sig(f) for f in group]
     current, done = shape, 0
+    deadline = time.monotonic() + SPLIT_MAX_SECONDS
     for want in wanted:
+        if time.monotonic() > deadline:
+            break
         face = next((f for f in current.Faces if sig(f) == want), None)
         if face is None:
             continue
         try:
-            state, new, res = _attempt(current, [face], timeout)
+            if len(current.Faces) >= LOCAL_MIN_FACES:
+                state, new, res = _attempt_local(current, face, min(timeout, SPLIT_FACE_TIMEOUT))
+            else:
+                state, new, res = _attempt(current, [face], min(timeout, SPLIT_FACE_TIMEOUT))
         except Exception:                                   # noqa: BLE001
             continue
         if state != "ok" or not res["valid"] or len(new.Faces) >= len(current.Faces):
@@ -377,6 +417,14 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
                     if not res["valid"]:
                         return False, shape, "result invalid", res["gone"]
                     return True, proposal[1], "ok (rebuilt)", res["gone"]
+        if (len(group) > 1 and len(shape.Faces) >= LOCAL_MIN_FACES and not _test_delay
+                and not any(type(f.Surface).__name__ == "Plane" for f in group)):
+            # a big free-form model and a group of rounds only (no flat faces: logos and ribs are different):
+            # removing the whole group at once is slow and can break the shape, so go face by face in small
+            # pieces right away
+            split = _face_by_face(shape, group, timeout)
+            if split and split[1]["valid"]:
+                return True, split[0], "ok (face by face)", split[1]["gone"]
         state, new_shape, res = _attempt(shape, group, timeout, _test_delay)
         failure = None                                  # why the first attempt did not work
         if state == "timeout":
@@ -387,6 +435,8 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
             failure = f"exception: {res}"
         elif not changed(res):
             failure = "no-op (shape unchanged)"
+        elif abs(res["volume"] - shape.Volume) > MAX_VOLUME_CHANGE * max(abs(shape.Volume), 1e-9):
+            failure = "volume changed implausibly"          # defeaturing() broke the shape
         how = ""
         if failure:
             for fallback in FALLBACKS:
@@ -414,6 +464,9 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
         return False, shape, f"exception: {e!r}", nothing
     if not res["valid"]:
         return False, shape, "result invalid", res["gone"]
+    change = abs(res["volume"] - shape.Volume) / max(abs(shape.Volume), 1e-9)
+    if change > MAX_VOLUME_CHANGE:
+        return False, shape, f"volume changed by {100 * change:.0f} % (implausible)", res["gone"]
     if len(group) > 1 and not how:
         # defeaturing() may take only part of a group away, and the order matters for free-form faces: try
         # the faces one by one from the original as well and keep whichever leaves fewer of them behind

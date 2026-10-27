@@ -35,11 +35,13 @@ The code is organised the same way: one module per group in `src/rules/` (`holes
 | Group | Rule | Selects | Source |
 |---|---|---|---|
 | **Holes** | `ref_holes` | complete round holes (360 degrees) below the profile diameter, including a blind-hole floor | port of HP's example script |
-| **Edge treatments** | `ref_fillets` | blend faces (partial cylinder, torus, sphere) below the profile radius that run tangent into two supporting faces; removed together | port of HP's example script |
+| **Edge treatments** | `ref_fillets` | blend faces (partial cylinder, torus, sphere) below the profile radius that run tangent into two supporting faces; removed together. Also: a small partial round (up to 100 degrees) that runs out into a crease on one side, and the small free-form (B-spline, up to 30 mm2) patches at rounded corners that touch a selected round | port of HP's example script, plus our additions |
 | | `chamfer_edge` | a narrow face between two faces it meets at 25-65 degrees, those two being about 90 degrees apart (also countersinks) | ours |
 | **Protrusions** | `ref_protrusions` | rounded, elongated patches on a large plane that occur at least twice with the same shape (press-formed ribs) | port of HP's example script |
 | | `rib` | thin, long protrusions standing on a flat host (crossing networks, ribs over a gentle bend, ribs at a part's edge) | ours |
-| | `boss` | round columns standing on a flat host, up to the max. diameter | ours |
+| | `rib_simplify` | alternative to `rib` for ribs with rounded / free-form faces: they are not removed but replaced by rectangular ones (one box per straight segment; the two segments of a rib over a bend share one cross-section). Use it **instead of** `rib` - `rib` would remove the rectangular rib again | ours |
+| | `boss` | round columns standing on a flat host, up to the max. diameter. Kept: a boss with a hole through it, a boss with a round bore on its own axis, and a pin with a free-form body | ours |
+| | `pin_tip` | the tapered tip of a shaped pin (everything above its straight cylinder wall); it is replaced by a plain cylinder of the pin's radius up to the old tip height, so a bore that ends inside the tip is not opened | ours |
 | **Markings** | `logo` | engravings and embosses: faces bundled from the non-circular inner wires of a flat host, shallow only | HP's logo rule description, plus our depth cap |
 | *(test scaffolding)* | `cyl`, `prot`, `recess`, `chamfer`, `fail_demo` | the original rules, tied to the shape of the generated test parts | ours (test scaffolding) |
 
@@ -55,6 +57,12 @@ marking.
 `defeaturing()` can hang on some real free-form geometry. Headless runs therefore execute each removal in a
 separate FreeCAD process and kill it after 60 s (`CLEANCAD_DEFEATURE_TIMEOUT`, 0 = off). A timeout counts as an
 ordinary failure. The GUI demo runs in-process without a limit.
+
+Further checks in `remove_group_ex()`: a result whose volume differs by more than 20 % from the input is treated as a
+broken shape (defeaturing returned garbage on a free-form sample) and counts as a failure. When a whole group fails
+or only part of it goes, its faces are removed one at a time, largest first (each step must stay valid and change the
+volume by at most 1 %; 10 s per face, 150 s per group). Some rules register `pre_removal` hooks that replace
+defeaturing for their own features (`pin_tip`, `rib_simplify`).
 
 ## 4. How it was tested (and how far to trust it)
 
@@ -74,7 +82,11 @@ ordinary failure. The GUI demo runs in-process without a limit.
   cut, same guarded worker). On surface models (shells, no solid) a logo is removed by dropping its faces and
   re-making the host face without the logo's holes. Both are fallbacks, tried only after defeaturing failed.
 - Marking circles/rings (single circular wire) are treated as holes.
-- B-spline chamfers are detected but FreeCAD cannot remove them (reported as a failure).
+- B-spline chamfers are detected but FreeCAD cannot remove them as a group; face by face most of a strip goes, a few
+  faces stay (HP sample chamfer_001: reported as a partial failure). Filling the chamfer with a bounding box was tried
+  and rejected (adds too much); replacing near-flat B-spline faces by planes did not help either.
+- Free-form samples with ~100 faces (HP Ph_rib_to_keep) are slow: every removal re-computes the whole shape, 10-30 s
+  per face, so only part of the rounds is removed within the time budget.
 - Press-part logos given as open shells of flat free-form faces are recognized and mostly removed; a few thin
   stroke fragments of a letter can remain (faces beyond the 3-step limit).
 - The text test cases use the macOS font Arial Bold.

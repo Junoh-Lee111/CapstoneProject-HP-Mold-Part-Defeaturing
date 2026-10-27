@@ -19,6 +19,7 @@ from geom_utils import Topo, stype, flatten, sweep, outward_normal, same_cyl, co
 CHAMFER_ANGLE = (25.0, 65.0)
 CHAMFER_RIGHT_ANGLE = (65.0, 115.0)
 MIN_CHAMFER_WIDTH = 0.1
+CORNER_PATCH_MAX_AREA = 30.0  # mm2: a free-form patch this small beside a selected round is a rounded corner
 RUN_OUT_MAX_SWEEP = 100.0   # degrees: a partial round that ends in a crease counts as a fillet up to this sweep
 
 
@@ -83,6 +84,15 @@ def fillet_groups(shape, radius_limit):
         if any(j not in cand and not (stype(t.faces[j]) == "Cylinder" and same_cyl(f, t.faces[j]))
                for j in tang[i]):
             accepted.add(i)
+    # Rounded corners: the small free-form (B-spline) patches where rounded edges meet join the rounding they touch
+    grown = True
+    while grown:
+        grown = False
+        for i, f in enumerate(t.faces):
+            if (i not in accepted and stype(f) == "BSplineSurface" and t.area[i] <= CORNER_PATCH_MAX_AREA
+                    and t.nb[i] & accepted):
+                accepted.add(i)
+                grown = True
     return [[t.faces[i] for i in sorted(g)] for g in connected(accepted, t.nb)]
 
 
