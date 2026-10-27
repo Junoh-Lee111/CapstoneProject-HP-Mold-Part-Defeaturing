@@ -413,7 +413,6 @@ def _restart(wire, vertex):
     return Part.Wire(edges[k:] + edges[:k])
 
 
-SQUARE_OVERLAP = 1.0    # how far neighbouring rib boxes reach into each other
 SQUARE_EMBED = 0.5      # the box reaches this far into the host so that it fuses with it
 
 
@@ -457,46 +456,55 @@ def squarize_rib(shape, group):
 
     boxes = [make_box(sg) for sg in segs]
     boxes = [make_box(sg) for sg in segs]
-    # boxes of neighbouring segments overlap a little at the bend, so that no notch is left between them
-    for i, sg in enumerate(segs):
-        for j in range(len(segs)):
-            if j != i and boxes[i].distToShape(boxes[j])[0] <= 1.0:
-                towards = (segs[j]["mid"] - sg["mid"]).dot(sg["d"])
-                sg["a"][1 if towards > 0 else 0] += SQUARE_OVERLAP if towards > 0 else -SQUARE_OVERLAP
-    boxes = [make_box(sg) for sg in segs]
-    bridges = []
-    # Neighbouring segments of one rib sit on hosts at a slight angle to each other, so their boxes meet at the
-    # bend with a step or a gap: a ruled solid between their facing end faces joins them
-    for i in range(len(segs)):
-        for j in range(i + 1, len(segs)):
-            if boxes[i].distToShape(boxes[j])[0] > 1.0:
-                continue                                    # not neighbours
-            def end_face(k, other):
-                best = min(((f.CenterOfMass - segs[other]["mid"]).Length, f) for f in boxes[k].Faces
-                           if abs(f.normalAt(0, 0).dot(segs[k]["d"])) > 0.99)
-                return best[1]
-            try:
-                fi, fj = end_face(i, j), end_face(j, i)
-                wi, wj = fi.OuterWire, fj.OuterWire
-                # start both wires at the corner pair that is closest, so the ruled solid is not twisted
-                vi = min(wi.Vertexes, key=lambda v: min((v.Point - w.Point).Length for w in wj.Vertexes))
-                vj = min(wj.Vertexes, key=lambda v: (v.Point - vi.Point).Length)
-                wi = Part.Wire(Part.__sortEdges__(wi.Edges))
-                bridge = Part.makeLoft([_restart(wi, vi), _restart(wj, vj)], True, True)
-                if bridge.isValid() and 0 < bridge.Volume < 3 * max(fi.Area, fj.Area) * (segs[i]["mid"] - segs[j]["mid"]).Length:
-                    bridges.append(bridge)
-            except Exception as exc:                         # noqa: BLE001
-                continue
+    # Two neighbouring segments of one rib (on hosts at a slight angle to each other) are built from ONE shared
+    # cross-section at the bend: the first segment's rectangle cut by the plane that bisects the bend. Both
+    # segments are prisms from that rectangle, so they meet exactly: no gap, no overlap, no extra edges.
+    pairs = [(i, j) for i in range(len(segs)) for j in range(i + 1, len(segs))
+             if boxes[i].distToShape(boxes[j])[0] <= 1.0]
+    used = set()
+    pieces = []
+    for i, j in pairs:
+        if i in used or j in used:
+            continue
+        si, sj = segs[i], segs[j]
+        t_axis = si["n"].cross(sj["n"])
+        if t_axis.Length < 1e-6:
+            continue                                        # same plane: the boxes line up anyway
+        t_axis.normalize()
+        rows = [si["n"], sj["n"], t_axis]                   # a point q on the crease, at the height of box i
+        rhs = [si["n"].dot(si["o"]), sj["n"].dot(sj["o"]), t_axis.dot(si["mid"])]
+        det = rows[0].dot(rows[1].cross(rows[2]))
+        q = (rows[1].cross(rows[2]) * rhs[0] + rows[2].cross(rows[0]) * rhs[1]
+             + rows[0].cross(rows[1]) * rhs[2]) * (1 / det)
+        ui, uj = t_axis.cross(si["n"]), t_axis.cross(sj["n"])
+        if (si["mid"] - q).dot(ui) < 0:
+            ui = ui * -1
+        if (sj["mid"] - q).dot(uj) < 0:
+            uj = uj * -1
+        m = ui - uj
+        m.normalize()                                       # normal of the bisecting plane, towards side i
+        if abs(si["d"].dot(m)) < 1e-3 or abs(sj["d"].dot(m)) < 1e-3:
+            continue
+        corners = []
+        for ev, zv in ((si["w"][0], -SQUARE_EMBED), (si["w"][1], -SQUARE_EMBED),
+                       (si["w"][1], si["h"]), (si["w"][0], si["h"])):
+            base_pt = si["c"] + si["e"] * ev + si["n"] * zv
+            corners.append(base_pt + si["d"] * ((q - base_pt).dot(m) / si["d"].dot(m)))
+        section = Part.Face(Part.makePolygon(corners + [corners[0]]))
+        mid_pt = sum(corners, Vector(0, 0, 0)) * (1 / 4)
+        for sg, side in ((si, 1), (sj, -1)):                # side: the piece lies on this side of the plane
+            reach = [(sg["c"] + sg["d"] * a - mid_pt).dot(sg["d"]) for a in sg["a"]]
+            far = max(reach, key=lambda r: abs(r))
+            # direction away from the plane: towards the segment's far end
+            pieces.append(section.extrude(sg["d"] * far))
+        used |= {i, j}
+    boxes = [bx for k, bx in enumerate(boxes) if k not in used] + pieces
     timeout = core.DEFEATURE_TIMEOUT * max(1.0, len(shape.Faces) / 500.0)
     state, base, res = core._attempt(shape, group, timeout)
     if state != "ok" or not res["valid"]:
         return None
     for box in boxes:
         base = base.fuse(box)
-    for bridge in bridges:                  # a bridge is only kept if the result stays valid
-        joined = base.fuse(bridge)
-        if joined.isValid():
-            base = joined
     base = base.removeSplitter()
     return ("result", base) if base.isValid() else None
 
