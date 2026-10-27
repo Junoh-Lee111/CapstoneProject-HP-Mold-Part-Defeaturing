@@ -56,6 +56,17 @@ def rule(name, category="scaffolding"):
     return deco
 
 
+# The order in which all rules are applied: stand-up features first (ribs and bosses carry root fillets that
+# must not be removed on their own), then holes, then rounded / bevelled edges, then markings.
+RULE_ORDER = ("protrusions", "holes", "edges", "markings")
+
+
+def all_rules():
+    """Every real rule (not the test scaffolding) in the order they should be applied."""
+    cats = rules_by_category()
+    return [r for cat in RULE_ORDER for r in cats.get(cat, [])]
+
+
 def rules_by_category():
     """{category: [rule names]} - the rules grouped by what they recognise."""
     out = {}
@@ -181,7 +192,8 @@ def groups(shape, faces):
 # not survive fork). Headless runs therefore send each removal to a separate worker process
 # (src/engine/defeature_worker.py, one long-lived FreeCAD instance) and kill it after DEFEATURE_TIMEOUT
 # seconds. A timeout (or a crash of the worker) is reported as an ordinary failure, so process()
-# skips that feature and carries on. In the GUI the call runs in-process without a limit.
+# skips that feature and carries on (the limit is scaled up for models of more than 500 faces).
+# In the GUI the call runs in-process without a limit.
 DEFEATURE_TIMEOUT = float(os.environ.get("CLEANCAD_DEFEATURE_TIMEOUT", "60"))   # seconds; 0 = off
 
 
@@ -206,9 +218,9 @@ class _Worker:
         env = dict(os.environ, CLEANCAD_WORKER_DIR=self.dir, CLEANCAD_PARENT_PID=str(os.getpid()))
         self.proc = subprocess.Popen([exe, script], env=env, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
-        deadline = time.time() + 120
+        deadline = time.monotonic() + 120
         while not os.path.exists(os.path.join(self.dir, "ready")):
-            if self.proc.poll() is not None or time.time() > deadline:
+            if self.proc.poll() is not None or time.monotonic() > deadline:
                 self.kill()
                 raise WorkerUnavailable("worker did not start")
             time.sleep(0.05)
@@ -245,12 +257,12 @@ class _Worker:
             put(f"req{n}.tool.brep", tool.exportBrepToString())
         put(f"req{n}.json", json.dumps({"faces": idx, "delay": delay, "op": "cut" if tool is not None else "defeature"}))
         res_path = os.path.join(self.dir, f"res{n}.json")
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + timeout
         while not os.path.exists(res_path):
             if self.proc.poll() is not None:
                 self.kill()
                 return "crash", "the CAD kernel process died"
-            if time.time() > deadline:
+            if time.monotonic() > deadline:
                 self.kill()
                 return "timeout", f"no answer after {timeout:g} s"
             time.sleep(0.01)
@@ -308,7 +320,10 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
 
     Returns (ok, shape, why, gone) where gone[i] says whether group[i] no longer exists in the result.
     """
-    timeout = DEFEATURE_TIMEOUT if timeout is None else timeout
+    if timeout is None:
+        # a big model legitimately needs longer (a 1000-face logo takes ~35 s): the limit grows with the face
+        # count above 500 faces, so only a genuinely stuck kernel call is cut off
+        timeout = DEFEATURE_TIMEOUT * max(1.0, len(shape.Faces) / 500.0)
     nothing = [False] * len(group)
 
     def changed(res):
@@ -363,6 +378,14 @@ def _stages(rule_names):
     return ([face] if face else []) + [[r] for r in rule_names if r in SET_RULES]
 
 
+# A removal that times out wastes the whole time limit. After this many timeouts of one rule the rest of that
+# rule's features are skipped (and recorded as failures) instead of trying each of them in turn.
+MAX_TIMEOUTS_PER_RULE = int(os.environ.get("CLEANCAD_MAX_TIMEOUTS", "2"))
+# Failed removals that return quickly are cheap, but on a big model each one can still take many seconds.
+# After this many seconds spent on failed removals of one rule, the rest of that rule is skipped as well.
+MAX_WASTED_SECONDS = float(os.environ.get("CLEANCAD_MAX_WASTED_SECONDS", "180"))
+
+
 def process(shape, rule_names):
     """Headless end-to-end: repeatedly remove feature groups until none remain.
 
@@ -373,37 +396,80 @@ def process(shape, rule_names):
     failed_sigs, removed, failures, batch_dead = set(), [], [], set()
     stages = _stages(rule_names)
     current = shape
+    timeouts, wasted = {}, {}
+
+    def note_failure(name, why, seconds=0.0):
+        if str(why).startswith("timeout"):
+            timeouts[name] = timeouts.get(name, 0) + 1
+        wasted[name] = wasted.get(name, 0.0) + seconds
+
+    def skip_rest(stage):
+        """Once a rule has timed out too often, give up on its remaining features."""
+        name = stage[0]
+        too_many_timeouts = timeouts.get(name, 0) >= MAX_TIMEOUTS_PER_RULE
+        too_slow = wasted.get(name, 0.0) >= MAX_WASTED_SECONDS
+        if not (too_many_timeouts or too_slow):
+            return
+        rest = select(current, stage, failed_sigs)
+        if rest:
+            info = info_for(rest)
+            info["reason"] = (f"skipped: {timeouts[name]} removals of '{name}' timed out already" if too_many_timeouts
+                              else f"skipped: failed removals of '{name}' already took {wasted[name]:.0f} s")
+            failures.append(info)
+            failed_sigs.update(info["sigs"])
 
     def info_for(group):
         return {"faces": len(group),
                 "types": sorted({type(f.Surface).__name__ for f in group}),
                 "sigs": [sig(f) for f in group]}
 
+    cache = {}      # stage name -> (shape, groups still to try): while the shape does not change (after a
+    #                 failed removal) the next group is taken from here instead of selecting and grouping again
+
     while True:
         progressed = False
         for stage in stages:
-            selected = select(current, stage, failed_sigs)
-            if not selected:
-                continue
             name = stage[0]
-            if name in BATCH and name not in batch_dead:
-                ok, new_shape, why, gone = remove_group_ex(current, selected)
-                if ok:
-                    if not any(gone) or (BATCH[name] == "only" and not all(gone)):
-                        ok, why = False, "requested faces not (fully) removed"
-                if ok:
-                    removed.append(info_for(selected))
-                    current, progressed = new_shape, True
-                    break
-                if BATCH[name] == "only":
-                    info = info_for(selected)
-                    info["reason"] = why
-                    failures.append(info)
-                    failed_sigs.update(info["sigs"])
-                    progressed = True
-                    break
-                batch_dead.add(name)   # "try": fall back to per-feature removal below
-            group = groups(current, selected)[0]
+            cached = cache.get(name)
+            if cached is not None and cached[0] is current:
+                todo = [(g, s) for g, s in cached[1] if not (s & failed_sigs)]
+                cache[name] = (current, todo[1:])
+                if not todo:
+                    continue
+                group = todo[0][0]
+            else:
+                selected = select(current, stage, failed_sigs)
+                if not selected:
+                    continue
+                if name in BATCH and name not in batch_dead:
+                    t_batch = time.monotonic()
+                    ok, new_shape, why, gone = remove_group_ex(current, selected)
+                    if ok:
+                        if not any(gone) or (BATCH[name] == "only" and not all(gone)):
+                            ok, why = False, "requested faces not (fully) removed"
+                    if ok:
+                        removed.append(info_for(selected))
+                        current, progressed = new_shape, True
+                        break
+                    note_failure(name, why, time.monotonic() - t_batch)
+                    if BATCH[name] == "only":
+                        info = info_for(selected)
+                        info["reason"] = why
+                        failures.append(info)
+                        failed_sigs.update(info["sigs"])
+                        skip_rest(stage)
+                        progressed = True
+                        break
+                    batch_dead.add(name)   # "try": fall back to per-feature removal below
+                    skip_rest(stage)
+                    if not select(current, stage, failed_sigs):
+                        progressed = True
+                        break
+                # sig() is not cheap (centre of mass), so the signatures of every group are computed once
+                feature_groups = [(g, frozenset(sig(f) for f in g)) for g in groups(current, selected)]
+                group = feature_groups[0][0]
+                cache[name] = (current, feature_groups[1:])
+            t_group = time.monotonic()
             ok, new_shape, why = remove_group(current, group)
             info = info_for(group)
             if ok:
@@ -413,6 +479,8 @@ def process(shape, rule_names):
                 info["reason"] = why
                 failures.append(info)
                 failed_sigs.update(info["sigs"])
+                note_failure(name, why, time.monotonic() - t_group)
+                skip_rest(stage)
             progressed = True
             break
         if not progressed:
