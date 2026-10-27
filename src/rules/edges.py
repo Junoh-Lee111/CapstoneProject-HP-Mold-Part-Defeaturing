@@ -72,6 +72,16 @@ def fillet_groups(shape, radius_limit):
             if abs(radii[i] - radii[j]) <= GEOM_TOL:
                 accepted.add(j)
                 stack.append(j)
+    # A small round of the same radius as an accepted fillet, two faces away (a step in the same edge), that is
+    # tangent on one side only because it runs out into a crease on the other: it belongs to the same rounding.
+    for i in sorted(cand - accepted):
+        f = t.faces[i]
+        if stype(f) != "Cylinder" or sweep(f) >= TWO_PI - 1e-5:
+            continue
+        has_support = any(j not in cand for j in tang[i])
+        near = set().union(*(t.nb[j] for j in t.nb[i])) - {i}
+        if has_support and any(a in near and abs(radii[a] - radii[i]) <= GEOM_TOL for a in accepted):
+            accepted.add(i)
     return [[t.faces[i] for i in sorted(g)] for g in connected(accepted, t.nb)]
 
 

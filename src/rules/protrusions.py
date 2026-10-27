@@ -204,6 +204,9 @@ def protrusion_bundles(shape):
             length = max(wb[1] - wb[0], wb[3] - wb[2])
             if is_circle_wire(wire):
                 kind = "boss" if 2 * wire.Edges[0].Curve.Radius <= boss_max else None
+                # a boss with a hole through it (a ring around a fastener hole) is a functional feature: it stays
+                if kind and any(len(t.faces[f].Wires) > 1 for f in tops):
+                    kind = None
             elif thickness <= rib_max and length >= RIB_MIN_LENGTH_FACTOR * thickness:
                 kind = "rib"
             else:

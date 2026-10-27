@@ -202,8 +202,21 @@ def gen_boss():
     base = flat_plate().cut(Part.makeCylinder(2.5, 20, Vector(50, 30, -5)))
     save("boss", plate, ["prot"], 7, PLATE_VOL - math.pi * 6.25 * 3,
          "boss removed, screw hole through the plate stays",
-         base=base, kinds=[("boss", lambda f: True)],
-         generic_rules=["boss"])
+         base=base, kinds=[("boss", lambda f: True)])
+
+
+def gen_boss_solid():
+    plate = flat_plate().fuse(Part.makeCylinder(7, 6, Vector(50, 30, 3))).removeSplitter()
+    save("boss_solid", plate, ["prot"], 6, PLATE_VOL, "solid column (no hole) -> plain plate",
+         base=flat_plate(), kinds=[("boss", lambda f: True)], generic_rules=["boss"])
+
+
+def gen_boss_with_hole():
+    plate = flat_plate().fuse(Part.makeCylinder(7, 6, Vector(50, 30, 3))).removeSplitter()
+    plate = plate.cut(Part.makeCylinder(2.5, 20, Vector(50, 30, -5)))
+    # a ring around a fastener hole is functional (HP sample Hole4): the boss rule must leave it alone
+    save("boss_with_hole", plate, ["boss"], len(plate.Faces), plate.Volume,
+         "boss with a hole through it (fastener ring) -> unchanged", base=plate)
 
 
 def gen_emboss():
@@ -330,7 +343,7 @@ def gen_large_features():
 
 def main():
     for gen in (gen_plate_hole_fillets, gen_curved_press, gen_ribbed, gen_chamfer,
-                gen_boss, gen_emboss, gen_rib_network, gen_near_edge, gen_fail_demo,
+                gen_boss, gen_boss_solid, gen_boss_with_hole, gen_emboss, gen_rib_network, gen_near_edge, gen_fail_demo,
                 gen_logo_engrave, gen_logo_emboss, gen_logo_through_text, gen_pocket, gen_large_features):
         gen()
     manifest_path = os.path.join(OUT, "manifest.json")
