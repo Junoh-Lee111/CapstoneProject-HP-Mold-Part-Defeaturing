@@ -207,13 +207,33 @@ def protrusion_bundles(shape):
                 # a boss with a hole through it (a ring around a fastener hole) is a functional feature: it stays
                 if kind and any(len(t.faces[f].Wires) > 1 for f in tops):
                     kind = None
+                # a boss with a round bore on its own axis running up into it (a pin pressed or screwed from
+                # behind, or the pin whose tip was just simplified) is functional: it stays
+                if kind == "boss" and not any(stype(t.faces[f]) == "BSplineSurface" for f in bundle):
+                    axis = wire.Edges[0].Curve
+                    for j in range(len(t.faces)):
+                        if not bore_wall(j):
+                            continue
+                        c = t.faces[j].Surface
+                        off = c.Center - axis.Center
+                        off = off - n * off.dot(n)
+                        if (abs(abs(c.Axis.dot(n)) - 1) < 1e-6 and off.Length < 1e-3
+                                and max(heights(j)) > BELOW_TOL):
+                            kind = None
+                            break
+                # a pin with a free-form (tapered, shaped) body is a locating pin, not a plain boss: it stays,
+                # only its shaped tip (everything above the straight cylinder wall) is simplified
+                if kind and any(stype(t.faces[f]) == "BSplineSurface" for f in bundle):
+                    kind = "pin"
             elif thickness <= rib_max and length >= RIB_MIN_LENGTH_FACTOR * thickness:
                 kind = "rib"
             else:
                 kind = None
             if kind:
+                walls = [max(heights(f)) for f in bundle if stype(t.faces[f]) == "Cylinder"]
                 out.append({"kind": kind, "host": h, "faces": sorted(bundle), "height": height,
-                            "thickness": thickness, "length": length})
+                            "thickness": thickness, "length": length,
+                            "base_h": max(walls) if kind == "pin" and walls else 0.0})
         # ribs that reach the edge of the host: components of the faces standing on the host plane,
         # started from the OUTER wire (the faces below the plane are the plate itself and never qualify).
         # The host may be a gently bent sheet: faces are also measured against the neighbouring flat
@@ -307,12 +327,42 @@ def cut_protrusion(shape, group):
             box = box2d(pts, u, v)
             margin = 0.3
             a0, b0 = box[0] - margin, box[2] - margin
+            z0 = b.get("base_h", 0.0)       # a pin is cut only above its straight wall
             prism = __import__("Part").makeBox(box[1] - box[0] + 2 * margin, box[3] - box[2] + 2 * margin,
-                                               b["height"] + 1.0)
-            corner = u * a0 + v * b0 + n * origin.dot(n)
+                                               b["height"] + 1.0 - z0)
+            corner = u * a0 + v * b0 + n * (origin.dot(n) + z0)
             prism.Placement = Placement(Matrix(u.x, v.x, n.x, corner.x, u.y, v.y, n.y, corner.y,
                                                u.z, v.z, n.z, corner.z, 0, 0, 0, 1))
             return prism
+    return None
+
+
+@core.pre_removal
+def fill_pin_tip(shape, group):
+    """A shaped pin's tip is replaced by a plain cylinder of the pin's radius up to the old tip height. (Plain
+    defeaturing would just cut the tip off and open the bore that ends inside it.)"""
+    import Part
+    wanted = {core.sig(f) for f in group}
+    t, bundles = protrusion_bundles(shape)
+    for b in bundles:
+        if b["kind"] != "pin" or not wanted <= {core.sig(t.faces[i]) for i in b["faces"]}:
+            continue
+        wall = [t.faces[i] for i in b["faces"] if stype(t.faces[i]) == "Cylinder"]
+        if not wall:
+            return None
+        surf = wall[0].Surface
+        origin, n, u, v = plane_frame(t.faces[b["host"]], t.plane(b["host"]))
+        c = surf.Center
+        base = c - n * (c - origin).dot(n) + n * b["base_h"]
+        try:
+            cut = cut_protrusion(shape, group)
+            if cut is None:
+                return None
+            body = shape.cut(cut)
+            plug = Part.makeCylinder(surf.Radius, b["height"] - b["base_h"] + 1e-3, base, n)
+            return ("result", body.fuse(plug).removeSplitter())
+        except Exception:               # noqa: BLE001
+            return None
     return None
 
 
@@ -326,6 +376,14 @@ def _protrusions(shape):
 def _rib(shape):
     t, bundles = protrusion_bundles(shape)
     return [t.faces[i] for i in sorted({i for b in bundles if b["kind"] == "rib" for i in b["faces"]})]
+
+
+@core.set_rule("pin_tip", category="protrusions")
+def _pin_tip(shape):
+    """Shaped locating pins stay; their tapered tip (all faces above the straight cylinder wall) is cut flat."""
+    t, bundles = protrusion_bundles(shape)
+    return [t.faces[i] for b in bundles if b["kind"] == "pin" for i in b["faces"]
+            if stype(t.faces[i]) != "Cylinder"]
 
 
 @core.set_rule("boss", category="protrusions")

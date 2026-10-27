@@ -37,7 +37,7 @@ PROFILES = {
                    "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
     # HP: when fastener holes must be kept, remove only holes of 2 mm or less (fasteners are ~2.7 mm).
     # fillet value is the earlier mentor starting value, still to be confirmed.
-    "keep_fasteners": {"hole_diameter": 2.0 + 1e-6, "fillet_radius": 5.0, "logo_max_depth": 0.5,
+    "keep_fasteners": {"hole_diameter": 0.0, "fillet_radius": 5.0, "logo_max_depth": 0.5,
                    "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
 }
 PROFILE = dict(PROFILES[os.environ.get("CLEANCAD_PROFILE", "hp_example")])
@@ -281,6 +281,15 @@ def removal_fallback(fn):
     return fn
 
 
+PRE_REMOVALS = []   # fn(shape, group) -> ("result", new_shape) or None: tried BEFORE defeaturing() (a feature that
+                    # defeaturing() would remove in the wrong way, e.g. a pin tip that has to be filled, not opened)
+
+
+def pre_removal(fn):
+    PRE_REMOVALS.append(fn)
+    return fn
+
+
 _WORKER = _Worker()
 atexit.register(_WORKER.kill)
 
@@ -330,6 +339,14 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
         return res["faces"] < len(shape.Faces) or abs(res["volume"] - shape.Volume) > 1e-6
 
     try:
+        for hook in PRE_REMOVALS:
+            proposal = hook(shape, group)
+            if proposal is not None and proposal[0] == "result":
+                res = _judge(group, proposal[1])
+                if changed(res):
+                    if not res["valid"]:
+                        return False, shape, "result invalid", res["gone"]
+                    return True, proposal[1], "ok (rebuilt)", res["gone"]
         state, new_shape, res = _attempt(shape, group, timeout, _test_delay)
         failure = None                                  # why the first attempt did not work
         if state == "timeout":

@@ -20,7 +20,7 @@ Size limits are **profiles** (configuration), selected with the environment vari
 | Profile | Meaning | Hole diameter | Fillet radius |
 |---|---|---|---|
 | `hp_example` (default) | parameters of the example HP sent; only for that example | < 6 mm | < 10 mm |
-| `keep_fasteners` | fastener holes are kept: only holes of 2 mm or less are removed (HP, 2026-10-13) | <= 2 mm | < 5 mm (earlier starting value, unconfirmed) |
+| `keep_fasteners` | complete round holes are always kept (they may be screw holes or other functional parts; team decision 2026-10-27) | none removed | < 5 mm (earlier starting value, unconfirmed) |
 | `recognition_only` | wide limits, to test recognition independent of size | < 50 mm | < 50 mm |
 
 All profiles also carry: logo depth cap 0.5 mm, boss max. diameter 20 mm, rib max. thickness 4 mm,
