@@ -19,6 +19,7 @@ from geom_utils import Topo, stype, flatten, sweep, outward_normal, same_cyl, co
 CHAMFER_ANGLE = (25.0, 65.0)
 CHAMFER_RIGHT_ANGLE = (65.0, 115.0)
 MIN_CHAMFER_WIDTH = 0.1
+RUN_OUT_MAX_SWEEP = 100.0   # degrees: a partial round that ends in a crease counts as a fillet up to this sweep
 
 
 def blend_radius(f):
@@ -72,15 +73,15 @@ def fillet_groups(shape, radius_limit):
             if abs(radii[i] - radii[j]) <= GEOM_TOL:
                 accepted.add(j)
                 stack.append(j)
-    # A small round of the same radius as an accepted fillet, two faces away (a step in the same edge), that is
-    # tangent on one side only because it runs out into a crease on the other: it belongs to the same rounding.
+    # A small partial round (at most ~100 degrees) that is tangent to a supporting face on one side only and runs
+    # out into a crease on the other: a rounding that ends at a slope (HP samples Hole3 / Hole4). A full hole wall
+    # or a half-round notch is not one (sweep).
     for i in sorted(cand - accepted):
         f = t.faces[i]
-        if stype(f) != "Cylinder" or sweep(f) >= TWO_PI - 1e-5:
+        if stype(f) != "Cylinder" or sweep(f) > math.radians(RUN_OUT_MAX_SWEEP):
             continue
-        has_support = any(j not in cand for j in tang[i])
-        near = set().union(*(t.nb[j] for j in t.nb[i])) - {i}
-        if has_support and any(a in near and abs(radii[a] - radii[i]) <= GEOM_TOL for a in accepted):
+        if any(j not in cand and not (stype(t.faces[j]) == "Cylinder" and same_cyl(f, t.faces[j]))
+               for j in tang[i]):
             accepted.add(i)
     return [[t.faces[i] for i in sorted(g)] for g in connected(accepted, t.nb)]
 

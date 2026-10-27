@@ -301,8 +301,12 @@ def _read_cam(view):
     return text, pos, (float(m.group(1)) if m else None)
 
 
-def _write_cam(view, text, pos, height):
+def _write_cam(view, text, pos, height, rot=None):
     text = re.sub(r"position\s+\S+\s+\S+\s+\S+", f"position {pos.x} {pos.y} {pos.z}", text, count=1)
+    if rot is not None:
+        ax = rot.Axis
+        text = re.sub(r"orientation\s+\S+\s+\S+\s+\S+\s+\S+",
+                      f"orientation {ax.x} {ax.y} {ax.z} {rot.Angle}", text, count=1)
     if height is not None:
         text = re.sub(r"\bheight\s+\S+", f"height {height}", text, count=1)
     view.setCamera(text)
@@ -372,17 +376,46 @@ def animate_view(set_target, on_done, ms=900, on_frame=None, centers=None):
     tick()
 
 
-def glide_to_box(box, then, ms=700):
-    """Smoothly zoom the camera onto `box` (a feature) without changing the viewing direction; a little room
-    is left around it. `then()` runs when the glide is done."""
+def _outward(faces, box, whole):
+    """Direction the feature faces towards: the area-weighted mean face normal, or (for a hole, whose wall
+    normals cancel out) the direction from the part's centre to the feature."""
+    total, acc = 0.0, App.Vector(0, 0, 0)
+    for f in faces:
+        try:
+            u0, u1, v0, v1 = f.ParameterRange
+            n = f.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+        except Exception:                                          # noqa: BLE001
+            continue
+        acc += n * f.Area
+        total += f.Area
+    if total > 0 and acc.Length > 0.3 * total:
+        return acc * (1 / acc.Length)
+    d = box.Center - whole.Center
+    return d * (1 / d.Length) if d.Length > 1e-6 else None
+
+
+def glide_to_box(box, then, ms=700, faces=None):
+    """Smoothly zoom the camera onto `box` (a feature); a little room is left around it. If `faces` (the
+    feature) point away from the camera, the view is also turned so that its side is seen. `then()` runs
+    when the glide is done."""
     view = Gui.activeDocument().activeView()
     try:
         text, start_pos, start_h = _read_cam(view)
-        rot = view.getCameraOrientation()
-        back = rot.multVec(App.Vector(0, 0, 1))                   # from the scene towards the camera
-        radius = max(box.DiagonalLength / 2, 1.0) * 1.6           # room around the feature
+        start_rot = view.getCameraOrientation()
+        back = start_rot.multVec(App.Vector(0, 0, 1))             # from the scene towards the camera
+        end_rot = start_rot
         whole = state["obj"].Shape.BoundBox
+        out = _outward(faces, box, whole) if faces else None
+        if out is not None and out.dot(back) < 0.3:               # hidden or seen edge-on: turn to it
+            if out.dot(back) < -0.99:
+                turn = App.Rotation(start_rot.multVec(App.Vector(0, 1, 0)), 180)
+            else:
+                turn = App.Rotation(back, out)
+            end_rot = turn.multiply(start_rot)
+        log(f"feature faces {out} , camera back {back} -> {'turn' if end_rot is not start_rot else 'no turn'}")
+        radius = max(box.DiagonalLength / 2, 1.0) * 1.6           # room around the feature
         d0 = abs((start_pos - whole.Center).dot(back))
+        start_focus = start_pos - back * d0
         if start_h is not None:                                   # orthographic camera
             end_h = min(start_h, max(2 * radius, 0.1 * start_h))
             end_d = d0
@@ -391,18 +424,24 @@ def glide_to_box(box, then, ms=700):
             half = float(m.group(1)) / 2 if m else 0.3927
             end_h = None
             end_d = min(d0, max(radius / math.tan(half), 0.1 * d0))
-        end_pos = box.Center + back * end_d
     except Exception as e:                                         # noqa: BLE001
         log(f"zoom to feature unavailable ({e!r})")
         return then()
+    turning = end_rot is not start_rot
+    if turning:
+        ms = max(ms, 1000)
     frames, count = max(1, ms // 33), [0]
 
     def tick():
         count[0] += 1
         s = count[0] / frames
         s = s * s * (3 - 2 * s)
-        pos = start_pos + (end_pos - start_pos) * s
-        _write_cam(view, text, pos, None if end_h is None else start_h * (1 - s) + end_h * s)
+        rot = start_rot.slerp(end_rot, s) if turning else start_rot
+        focus = start_focus + (box.Center - start_focus) * s
+        dist = d0 * (1 - s) + end_d * s
+        pos = focus + rot.multVec(App.Vector(0, 0, dist))
+        _write_cam(view, text, pos, None if end_h is None else start_h * (1 - s) + end_h * s,
+                   rot if turning else None)
         Gui.updateGui()
         if count[0] >= frames:
             then()
@@ -871,7 +910,7 @@ def remove_next():
         state["busy"] = False
         _remove_group(current, group)
 
-    glide_to_box(box, _guard(after_zoom))
+    glide_to_box(box, _guard(after_zoom), faces=group)
 
 
 def _remove_group(current, group):
