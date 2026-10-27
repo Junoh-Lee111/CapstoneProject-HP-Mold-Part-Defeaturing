@@ -386,6 +386,113 @@ def _pin_tip(shape):
             if stype(t.faces[i]) != "Cylinder"]
 
 
+_SIMPLIFY = set()      # signatures of the faces the last rib_simplify selection chose (see squarize_rib)
+
+
+def _curved_ribs(shape):
+    t, bundles = protrusion_bundles(shape)
+    return t, [b for b in bundles if b["kind"] == "rib" and any(stype(t.faces[i]) != "Plane" for i in b["faces"])]
+
+
+@core.set_rule("rib_simplify", category="protrusions")
+def _rib_simplify(shape):
+    """Ribs with rounded / free-form faces are not removed but made rectangular (see squarize_rib)."""
+    t, bundles = _curved_ribs(shape)
+    faces = [t.faces[i] for i in sorted({i for b in bundles for i in b["faces"]})]
+    _SIMPLIFY.clear()
+    _SIMPLIFY.update(core.sig(f) for f in faces)
+    return faces
+
+
+def _restart(wire, vertex):
+    """The wire with its edge order rotated so that it starts at `vertex`."""
+    edges = list(wire.OrderedEdges)
+    k = next((n for n, e in enumerate(edges) if e.Vertexes[0].Point.distanceToPoint(vertex.Point) < 1e-6
+              or e.Vertexes[-1].Point.distanceToPoint(vertex.Point) < 1e-6), 0)
+    import Part
+    return Part.Wire(edges[k:] + edges[:k])
+
+
+SQUARE_EMBED = 0.5      # the box reaches this far into the host so that it fuses with it
+
+
+@core.pre_removal
+def squarize_rib(shape, group):
+    """Replace a rounded rib by a rectangular one: the rib faces are removed as usual, then, for every rib
+    segment (a rib that runs over a bend is one segment per flat host), the oriented rectangle that
+    encloses its footprint is fused back on, standing on the host up to the rib's height."""
+    import Part
+    from FreeCAD import Matrix, Placement, Vector
+    wanted = {core.sig(f) for f in group}
+    if not wanted & _SIMPLIFY:
+        return None
+    t, bundles = _curved_ribs(shape)
+    mine = [b for b in bundles
+            if len(wanted & {core.sig(t.faces[i]) for i in b["faces"]}) * 2 >= len(b["faces"])]
+    if not mine:
+        return None
+    segs = []
+    for b in mine:
+        origin, n, u, v = plane_frame(t.faces[b["host"]], t.plane(b["host"]))
+        pts = [(((p - origin).dot(u)), ((p - origin).dot(v))) for i in b["faces"] for p in face_points(t.faces[i])]
+        cx, cy = sum(a for a, _ in pts) / len(pts), sum(c for _, c in pts) / len(pts)
+        sxx = sum((a - cx) ** 2 for a, _ in pts)
+        syy = sum((c - cy) ** 2 for _, c in pts)
+        sxy = sum((a - cx) * (c - cy) for a, c in pts)
+        ang = 0.5 * math.atan2(2 * sxy, sxx - syy)            # long axis of the footprint
+        d, e = u * math.cos(ang) + v * math.sin(ang), v * math.cos(ang) - u * math.sin(ang)
+        da = [(p[0] - cx) * math.cos(ang) + (p[1] - cy) * math.sin(ang) for p in pts]
+        ea = [-(p[0] - cx) * math.sin(ang) + (p[1] - cy) * math.cos(ang) for p in pts]
+        mid = origin + u * cx + v * cy + d * (min(da) + max(da)) / 2 + e * (min(ea) + max(ea)) / 2
+        segs.append({"o": origin, "n": n, "d": d, "e": e, "c": (origin + u * cx + v * cy), "mid": mid,
+                     "a": [min(da), max(da)], "w": [min(ea), max(ea)], "h": b["height"]})
+    def make_box(sg):
+        d, e, n = sg["d"], sg["e"], sg["n"]
+        corner = sg["c"] + d * sg["a"][0] + e * sg["w"][0] - n * SQUARE_EMBED
+        box = Part.makeBox(sg["a"][1] - sg["a"][0], sg["w"][1] - sg["w"][0], sg["h"] + SQUARE_EMBED)
+        box.Placement = Placement(Matrix(d.x, e.x, n.x, corner.x, d.y, e.y, n.y, corner.y,
+                                         d.z, e.z, n.z, corner.z, 0, 0, 0, 1))
+        return box
+
+    boxes = [make_box(sg) for sg in segs]
+    boxes = [make_box(sg) for sg in segs]
+    bridges = []
+    # Neighbouring segments of one rib sit on hosts at a slight angle to each other, so their boxes meet at the
+    # bend with a step or a gap: a ruled solid between their facing end faces joins them
+    for i in range(len(segs)):
+        for j in range(i + 1, len(segs)):
+            if boxes[i].distToShape(boxes[j])[0] > 1.0:
+                continue                                    # not neighbours
+            def end_face(k, other):
+                best = min(((f.CenterOfMass - segs[other]["mid"]).Length, f) for f in boxes[k].Faces
+                           if abs(f.normalAt(0, 0).dot(segs[k]["d"])) > 0.99)
+                return best[1]
+            try:
+                fi, fj = end_face(i, j), end_face(j, i)
+                wi, wj = fi.OuterWire, fj.OuterWire
+                # start both wires at the corner pair that is closest, so the ruled solid is not twisted
+                vi = min(wi.Vertexes, key=lambda v: min((v.Point - w.Point).Length for w in wj.Vertexes))
+                vj = min(wj.Vertexes, key=lambda v: (v.Point - vi.Point).Length)
+                wi = Part.Wire(Part.__sortEdges__(wi.Edges))
+                bridge = Part.makeLoft([_restart(wi, vi), _restart(wj, vj)], True, True)
+                if bridge.isValid() and 0 < bridge.Volume < 3 * max(fi.Area, fj.Area) * (segs[i]["mid"] - segs[j]["mid"]).Length:
+                    bridges.append(bridge)
+            except Exception as exc:                         # noqa: BLE001
+                continue
+    timeout = core.DEFEATURE_TIMEOUT * max(1.0, len(shape.Faces) / 500.0)
+    state, base, res = core._attempt(shape, group, timeout)
+    if state != "ok" or not res["valid"]:
+        return None
+    for box in boxes:
+        base = base.fuse(box)
+    for bridge in bridges:                  # a bridge is only kept if the result stays valid
+        joined = base.fuse(bridge)
+        if joined.isValid():
+            base = joined
+    base = base.removeSplitter()
+    return ("result", base) if base.isValid() else None
+
+
 @core.set_rule("boss", category="protrusions")
 def _boss(shape):
     t, bundles = protrusion_bundles(shape)
