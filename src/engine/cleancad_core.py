@@ -384,6 +384,9 @@ MAX_TIMEOUTS_PER_RULE = int(os.environ.get("CLEANCAD_MAX_TIMEOUTS", "2"))
 # Failed removals that return quickly are cheap, but on a big model each one can still take many seconds.
 # After this many seconds spent on failed removals of one rule, the rest of that rule is skipped as well.
 MAX_WASTED_SECONDS = float(os.environ.get("CLEANCAD_MAX_WASTED_SECONDS", "180"))
+# Hard limit for one rule on one model, successes included (on a big model every removal also costs the
+# selecting and grouping of what is left).
+MAX_SECONDS_PER_RULE = float(os.environ.get("CLEANCAD_MAX_SECONDS_PER_RULE", "300"))
 
 
 def process(shape, rule_names):
@@ -396,7 +399,7 @@ def process(shape, rule_names):
     failed_sigs, removed, failures, batch_dead = set(), [], [], set()
     stages = _stages(rule_names)
     current = shape
-    timeouts, wasted = {}, {}
+    timeouts, wasted, started = {}, {}, {}
 
     def note_failure(name, why, seconds=0.0):
         if str(why).startswith("timeout"):
@@ -408,13 +411,15 @@ def process(shape, rule_names):
         name = stage[0]
         too_many_timeouts = timeouts.get(name, 0) >= MAX_TIMEOUTS_PER_RULE
         too_slow = wasted.get(name, 0.0) >= MAX_WASTED_SECONDS
-        if not (too_many_timeouts or too_slow):
+        over_budget = time.monotonic() - started.get(name, time.monotonic()) >= MAX_SECONDS_PER_RULE
+        if not (too_many_timeouts or too_slow or over_budget):
             return
         rest = select(current, stage, failed_sigs)
         if rest:
             info = info_for(rest)
-            info["reason"] = (f"skipped: {timeouts[name]} removals of '{name}' timed out already" if too_many_timeouts
-                              else f"skipped: failed removals of '{name}' already took {wasted[name]:.0f} s")
+            info["reason"] = (f"skipped: {timeouts.get(name, 0)} removals of '{name}' timed out already" if too_many_timeouts
+                              else f"skipped: failed removals of '{name}' already took {wasted[name]:.0f} s" if too_slow
+                              else f"skipped: '{name}' used up its time budget of {MAX_SECONDS_PER_RULE:.0f} s")
             failures.append(info)
             failed_sigs.update(info["sigs"])
 
@@ -430,6 +435,7 @@ def process(shape, rule_names):
         progressed = False
         for stage in stages:
             name = stage[0]
+            started.setdefault(name, time.monotonic())
             cached = cache.get(name)
             if cached is not None and cached[0] is current:
                 todo = [(g, s) for g, s in cached[1] if not (s & failed_sigs)]
@@ -475,6 +481,7 @@ def process(shape, rule_names):
             if ok:
                 removed.append(info)
                 current = new_shape
+                skip_rest(stage)       # only acts when the rule has used up its time budget
             else:
                 info["reason"] = why
                 failures.append(info)
