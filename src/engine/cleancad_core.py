@@ -414,6 +414,17 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
         return False, shape, f"exception: {e!r}", nothing
     if not res["valid"]:
         return False, shape, "result invalid", res["gone"]
+    if len(group) > 1 and not how:
+        # defeaturing() may take only part of a group away, and the order matters for free-form faces: try
+        # the faces one by one from the original as well and keep whichever leaves fewer of them behind
+        sigs = {sig(f) for f in group}
+        left_whole = sum(1 for f in new_shape.Faces if sig(f) in sigs)
+        if left_whole:
+            more = _face_by_face(shape, group, timeout)
+            if more and more[1]["valid"]:
+                left_split = sum(1 for g in more[1]["gone"] if not g)
+                if left_split < left_whole:
+                    new_shape, res, how = more[0], more[1], " (face by face)"
     return True, new_shape, "ok" + how, res["gone"]
 
 
