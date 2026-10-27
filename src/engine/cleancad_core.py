@@ -314,7 +314,10 @@ def _attempt(shape, group, timeout, delay=0, tool=None):
             new_shape = Part.Shape()
             new_shape.importBrepFromString(res["brep"])
             return "ok", new_shape, res
-    new_shape = shape.defeaturing(group) if tool is None else shape.cut(tool).removeSplitter()
+    try:
+        new_shape = shape.defeaturing(group) if tool is None else shape.cut(tool).removeSplitter()
+    except Exception as e:                  # noqa: BLE001  (like the worker: an error is a failed attempt, so the
+        return "error", None, repr(e)       # fallbacks still get their turn)
     return "ok", new_shape, _judge(group, new_shape)
 
 
@@ -435,7 +438,7 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
             failure = f"exception: {res}"
         elif not changed(res):
             failure = "no-op (shape unchanged)"
-        elif abs(res["volume"] - shape.Volume) > MAX_VOLUME_CHANGE * max(abs(shape.Volume), 1e-9):
+        elif shape.Solids and abs(res["volume"] - shape.Volume) > MAX_VOLUME_CHANGE * max(abs(shape.Volume), 1e-9):
             failure = "volume changed implausibly"          # defeaturing() broke the shape
         how = ""
         if failure:
@@ -465,7 +468,7 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
     if not res["valid"]:
         return False, shape, "result invalid", res["gone"]
     change = abs(res["volume"] - shape.Volume) / max(abs(shape.Volume), 1e-9)
-    if change > MAX_VOLUME_CHANGE:
+    if shape.Solids and change > MAX_VOLUME_CHANGE:         # (the "volume" of an open shell means nothing)
         return False, shape, f"volume changed by {100 * change:.0f} % (implausible)", res["gone"]
     if len(group) > 1 and not how:
         # defeaturing() may take only part of a group away, and the order matters for free-form faces: try
