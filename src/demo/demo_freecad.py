@@ -962,7 +962,10 @@ def go_back():
         interactive_begin()
     elif phase in ("removing", "result"):
         if phase == "result":
-            state["before"].ViewObject.Visibility = False
+            try:
+                state["before"].ViewObject.Visibility = False
+            except ReferenceError:              # the 'before' copy is already gone
+                pass
             hide_legend()
             state["phase"] = "removing"
         if state["history"]:
