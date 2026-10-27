@@ -318,6 +318,36 @@ def _attempt(shape, group, timeout, delay=0, tool=None):
     return "ok", new_shape, _judge(group, new_shape)
 
 
+SPLIT_MAX_VOLUME_CHANGE = 0.01   # a single face removal may change the volume by at most this fraction
+
+
+def _face_by_face(shape, group, timeout):
+    """Last resort when a whole group can not be removed (free-form faces often fail together but not one by
+    one): remove its faces one at a time, largest first, keeping each step that is valid and does not change
+    the volume by more than SPLIT_MAX_VOLUME_CHANGE. -> (shape, result dict) or None if no face could go."""
+    wanted = [sig(f) for f in sorted(group, key=lambda f: -f.Area)]
+    original = [sig(f) for f in group]
+    current, done = shape, 0
+    for want in wanted:
+        face = next((f for f in current.Faces if sig(f) == want), None)
+        if face is None:
+            continue
+        try:
+            state, new, res = _attempt(current, [face], timeout)
+        except Exception:                                   # noqa: BLE001
+            continue
+        if state != "ok" or not res["valid"] or len(new.Faces) >= len(current.Faces):
+            continue
+        if abs(res["volume"] - current.Volume) > SPLIT_MAX_VOLUME_CHANGE * max(shape.Volume, 1e-9):
+            continue
+        current, done = new, done + 1
+    if not done:
+        return None
+    left = {sig(f) for f in current.Faces}
+    return current, {"faces": len(current.Faces), "volume": current.Volume, "valid": current.isValid(),
+                     "gone": [s not in left for s in original]}
+
+
 def remove_group_ex(shape, group, timeout=None, _test_delay=0):
     """Remove one feature (a group of connected faces).
 
@@ -372,6 +402,11 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
                 if state2 == "ok" and changed(res2):
                     new_shape, res, failure, how = new2, res2, None, how2
                     break
+            if failure and len(group) > 1:
+                split = _face_by_face(shape, group, timeout)
+                if split:
+                    new_shape, res = split
+                    failure, how = None, " (face by face)"
             if failure:
                 gone = res["gone"] if state == "ok" else nothing
                 return False, shape, failure, gone
