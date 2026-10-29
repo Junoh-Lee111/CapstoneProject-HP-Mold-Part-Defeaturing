@@ -30,10 +30,12 @@ SAMPLES=(
   "rib|PH_rib_to_remove.step|$ALL|rounded ribs become rectangular ribs (no gap at the bend)"
   "logo1|Logoes_Press_01.step|$ALL|press-part logos on an open shell (two sheets); a small stub at the sheet edge remains"
   "logo2|Logoes_Press_02_X01.step|$ALL|press-part logos on an open shell"
-  "chamfer|chamfer_001_Remove.step|$ALL|LIMIT: free-form chamfer, only part of it can be removed (failure is reported)"
+  "chamfer|chamfer_001_Remove.step|$ALL|LIMIT: free-form chamfer, only part of it can be removed after ~35 s of retries (failure is reported)"
+  "fail_ribs|Many_ribs_to_remove.step|ref_protrusions,rib,boss,ref_fillets,chamfer_edge|FAILURE DEMO: very complex part (1566 faces, many B-spline rounds and ribs); broken removals are refused, the original is kept and the failures are saved (no retries)"
+  "fail_logo|Logoes_Mold_01.step|$ALL|FAILURE DEMO: large logo on a mold part (991 faces selected); shows how failures are reported on a big model"
 )
-# Not suited for a live demo: Ph_rib_to_keep (slow, only part of the rounds go), Many_ribs_to_remove (1566 faces, minutes),
-# Logoes_Mold_01 (991 faces, slow).
+# Not suited as a SUCCESS demo: Ph_rib_to_keep (slow, only part of the rounds go), Many_ribs_to_remove (1566 faces),
+# Logoes_Mold_01 (991 faces, slow): fail_ribs / fail_logo run the last two as failure demos.
 
 if [ "${1:-list}" = "list" ]; then
   printf '%-9s %-34s %s\n' NAME FILE "WHAT IT SHOWS"
@@ -54,6 +56,7 @@ for row in "${SAMPLES[@]}"; do
     pkill -f "Resources/bin/freecad" 2>/dev/null || true
     sleep 2
     echo "$name: $text"
+    if [[ "$name" == fail* ]]; then export CLEANCAD_NO_SPLIT=1; fi   # no face-by-face help: the plain failure
     CLEANCAD_PROFILE=keep_fasteners bash "$SCRIPT_DIR/fcdemo.sh" "$HP_SAMPLES/$file" "$rules"
     exit 0
   fi

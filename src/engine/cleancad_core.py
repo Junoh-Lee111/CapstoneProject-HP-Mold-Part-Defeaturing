@@ -321,7 +321,8 @@ def _attempt(shape, group, timeout, delay=0, tool=None):
     return "ok", new_shape, _judge(group, new_shape)
 
 
-SPLIT_MAX_SECONDS = 150.0         # one face-by-face attempt may take this long in all
+SPLIT_ENABLED = os.environ.get("CLEANCAD_NO_SPLIT") != "1"   # CLEANCAD_NO_SPLIT=1: no face-by-face help (failure demo)
+SPLIT_MAX_SECONDS = 150.0        # one face-by-face attempt may take this long in all
 SPLIT_FACE_TIMEOUT = 10.0         # and this long for a single face
 MAX_VOLUME_CHANGE = 0.20          # one removal that changes the volume by more than this is a broken result
 SPLIT_MAX_VOLUME_CHANGE = 0.01   # a single face removal may change the volume by at most this fraction
@@ -420,7 +421,7 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
                     if not res["valid"]:
                         return False, shape, "result invalid", res["gone"]
                     return True, proposal[1], "ok (rebuilt)", res["gone"]
-        if (len(group) > 1 and len(shape.Faces) >= LOCAL_MIN_FACES and not _test_delay
+        if (len(group) > 1 and SPLIT_ENABLED and len(shape.Faces) >= LOCAL_MIN_FACES and not _test_delay
                 and not any(type(f.Surface).__name__ == "Plane" for f in group)):
             # a big free-form model and a group of rounds only (no flat faces: logos and ribs are different):
             # removing the whole group at once is slow and can break the shape, so go face by face in small
@@ -455,7 +456,7 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
                 if state2 == "ok" and changed(res2):
                     new_shape, res, failure, how = new2, res2, None, how2
                     break
-            if failure and len(group) > 1:
+            if failure and len(group) > 1 and SPLIT_ENABLED:
                 split = _face_by_face(shape, group, timeout)
                 if split:
                     new_shape, res = split
@@ -470,7 +471,7 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
     change = abs(res["volume"] - shape.Volume) / max(abs(shape.Volume), 1e-9)
     if shape.Solids and change > MAX_VOLUME_CHANGE:         # (the "volume" of an open shell means nothing)
         return False, shape, f"volume changed by {100 * change:.0f} % (implausible)", res["gone"]
-    if len(group) > 1 and not how:
+    if len(group) > 1 and not how and SPLIT_ENABLED:
         # defeaturing() may take only part of a group away, and the order matters for free-form faces: try
         # the faces one by one from the original as well and keep whichever leaves fewer of them behind
         sigs = {sig(f) for f in group}
