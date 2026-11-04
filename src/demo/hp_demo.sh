@@ -7,14 +7,15 @@
 #   hp_demo.sh <name>          start one, e.g. hp_demo.sh pin     (a part of the file name is enough)
 #
 # Env:
-#   HP_SAMPLES   folder with the HP .step / .stp files (default: ~/Downloads/Features_Cut)
+#   HP_SAMPLES   folder with the HP .step / .stp files (required; no default, the files are confidential)
+#                e.g. export HP_SAMPLES=~/path/to/Features_Cut   (put it in your shell profile)
 #
 # Keys in the demo: -> next step, <- back, click a face to add / remove it, R reset, H hide messages.
 # Only one FreeCAD may run at a time: the script closes a demo that is still open.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HP_SAMPLES="${HP_SAMPLES:-$HOME/Downloads/Features_Cut}"
+HP_SAMPLES="${HP_SAMPLES:-}"
 
 # name | file | rules | what it shows
 ALL="ref_protrusions,rib_simplify,pin_tip,boss,ref_holes,ref_fillets,chamfer_edge,logo"
@@ -44,6 +45,12 @@ if [ "${1:-list}" = "list" ]; then
     printf '%-9s %-34s %s\n' "$name" "$file" "$text"
   done
   exit 0
+fi
+
+if [ -z "$HP_SAMPLES" ]; then
+  echo "HP_SAMPLES is not set. Point it at the folder with the HP .step / .stp files, e.g.:" >&2
+  echo "  export HP_SAMPLES=~/path/to/Features_Cut" >&2
+  exit 1
 fi
 
 for row in "${SAMPLES[@]}"; do

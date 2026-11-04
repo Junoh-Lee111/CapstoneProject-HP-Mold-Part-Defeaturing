@@ -21,7 +21,7 @@ bash src/demo/fcdemo.sh <file.step> <rule[,rule]>    # interactive demo, e.g. ri
 ```
 ### Demo with the HP sample parts
 The HP files are confidential and are not in the repository; `HP_SAMPLES` is the folder that holds them
-(default `~/Downloads/Features_Cut`).
+(required: `export HP_SAMPLES=...`, there is no default because the files are confidential).
 ```bash
 bash src/demo/hp_demo.sh list       # which samples, what each one shows, which have a known limit
 bash src/demo/hp_demo.sh pin        # start one (closes a demo that is still open)
