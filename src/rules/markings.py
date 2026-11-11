@@ -22,7 +22,7 @@ for _p in (_SRC, os.path.join(_SRC, "engine")):                       # layers: 
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import cleancad_core as core  # noqa: E402
-from geom_utils import Topo, stype, plane_frame, box2d, is_circle_wire  # noqa: E402,F401
+from geom_utils import Topo, stype, plane_frame, box2d, is_circle_wire, face_points  # noqa: E402,F401
 
 MIN_HOST_AREA = 20.0        # mm2: smaller flat faces are not logo hosts
 MAX_FACE_FRACTION = 0.20    # a bundle face must be smaller than this part of the host area
@@ -133,6 +133,91 @@ def _logo(shape):
     t, bundles = logo_bundles(shape)
     chosen = sorted({i for b in bundles for i in b["faces"]})
     return [t.faces[i] for i in chosen]
+
+
+MAX_POCKET_FACES = 40       # a closed pocket with more faces than this is not a shallow dimple
+POCKET_DEPTH_FACTOR = 0.35  # depth <= factor * size of the pocket opening (deeper = a blind hole, not a dimple)
+MAX_POCKET_FRACTION = 0.8   # the pocket faces together must be smaller than this part of the host area
+ABOVE_TOL = 1e-4            # mm: nothing of a deboss may stand above the host plane
+
+
+def deboss_bundles(shape):
+    """-> (topo, [{"host": index, "faces": [indices]}]) for every shallow CLOSED POCKET in a flat face
+    (mentor, Emboss / Deboss: Remove).
+
+    A pocket is what lies behind one inner wire of a flat host face when everything behind that wire is cut off
+    from the rest of the part: it is found by following the faces from the wire without ever crossing the host.
+    It is accepted when
+      - it touches the host only through that one wire (a through hole or slot reaches the other side of the part
+        and so touches the host's outer boundary or another wire: not a deboss; a pocket with a hole through its
+        floor is therefore kept, as are screw holes),
+      - nothing of it stands above the host plane (raised bosses belong to the boss rule); a pad inside the pocket
+        that rises back up to the host plane is part of the deboss,
+      - it is shallow: deeper than 0.35 x the opening is a blind hole, which the hole rule decides,
+      - it has at most 40 faces and covers less than 80 % of the host area.
+    The limits are parameters of this description, not validated general criteria."""
+    t = Topo(shape)
+    if not shape.Solids:
+        return t, []            # surface models (pressed sheets): their engravings belong to the logo rule
+    edge_owners = {}
+    for e, owners in t.edges:
+        edge_owners.setdefault(e.hashCode(), []).append((e, owners))
+
+    def owners_of(edge):
+        for e, owners in edge_owners.get(edge.hashCode(), []):
+            if e.isSame(edge):
+                return owners
+        return set()
+
+    bundles = []
+    for h, host in enumerate(t.faces):
+        if t.plane(h) is None or t.area[h] < MIN_HOST_AREA or len(host.Wires) < 2:
+            continue
+        origin, n, _, _ = plane_frame(host, t.plane(h))
+        for wire in host.Wires:
+            if wire.isSame(host.OuterWire):
+                continue
+            others = [w for w in host.Wires if not w.isSame(wire)]
+            seeds = set()
+            for e in wire.Edges:
+                seeds |= owners_of(e)
+            seeds.discard(h)
+            if not seeds:
+                continue
+            pocket, stack, leaked = set(seeds), list(seeds), False
+            while stack and not leaked:
+                for o in t.nb[stack.pop()]:
+                    if o != h and o not in pocket:
+                        pocket.add(o)
+                        stack.append(o)
+                        if len(pocket) > MAX_POCKET_FACES:
+                            leaked = True
+                            break
+            if leaked:
+                continue
+            # touches the host through this wire only
+            if any(owners_of(e) & pocket for w in others for e in w.Edges):
+                continue
+            heights = []
+            for i in pocket:
+                heights += [(p - origin).dot(n) for p in face_points(t.faces[i])]
+            if not heights or max(heights) > ABOVE_TOL:
+                continue        # something stands above the host plane: not a recess
+            depth = -min(heights)
+            bb = wire.BoundBox
+            size = max(bb.XLength, bb.YLength, bb.ZLength)
+            if depth < 1e-3 or depth > POCKET_DEPTH_FACTOR * size + 1e-6:
+                continue
+            if sum(t.area[i] for i in pocket) > MAX_POCKET_FRACTION * t.area[h]:
+                continue
+            bundles.append({"host": h, "faces": sorted(pocket)})
+    return t, bundles
+
+
+@core.set_rule("deboss", batch="try", category="markings")
+def _deboss(shape):
+    t, bundles = deboss_bundles(shape)
+    return [t.faces[i] for i in sorted({i for b in bundles for i in b["faces"]})]
 
 
 @core.removal_fallback

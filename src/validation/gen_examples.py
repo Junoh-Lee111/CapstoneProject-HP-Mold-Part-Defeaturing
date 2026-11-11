@@ -332,6 +332,22 @@ def gen_pocket():
          "blind rectangular pocket 20x12x1.5 (not a logo) -> unchanged", base=plate)
 
 
+def gen_deboss():
+    # a shallow round recess with a pad inside that rises back to the plate surface (HP sample Boss_to_remove)
+    plate = flat_plate().cut(Part.makeCylinder(6, 1, Vector(50, 30, 2)))
+    plate = plate.fuse(Part.makeCylinder(2, 1, Vector(50, 30, 2))).removeSplitter()
+    save("deboss", plate, ["deboss"], 6, PLATE_VOL, "shallow recess with a flush pad -> plain plate",
+         base=flat_plate(), kinds=[("deboss", lambda f: True)])
+
+
+def gen_deboss_with_hole():
+    plate = flat_plate().cut(Part.makeCylinder(6, 1, Vector(50, 30, 2)))
+    plate = plate.cut(Part.makeCylinder(2.5, 20, Vector(50, 30, -5)))
+    # a hole through the floor reaches the other side: a counterbored screw hole, not a deboss
+    save("deboss_with_hole", plate, ["deboss"], len(plate.Faces), plate.Volume,
+         "recess with a hole through its floor (screw seat) -> unchanged", base=plate)
+
+
 def gen_large_features():
     plate = Part.makeBox(120, 80, 3)
     plate = plate.fuse(Part.makeBox(30, 30, 8, Vector(10, 10, 3)))                  # thick block, not a rib
@@ -344,7 +360,8 @@ def gen_large_features():
 def main():
     for gen in (gen_plate_hole_fillets, gen_curved_press, gen_ribbed, gen_chamfer,
                 gen_boss, gen_boss_solid, gen_boss_with_hole, gen_emboss, gen_rib_network, gen_near_edge, gen_fail_demo,
-                gen_logo_engrave, gen_logo_emboss, gen_logo_through_text, gen_pocket, gen_large_features):
+                gen_logo_engrave, gen_logo_emboss, gen_logo_through_text, gen_pocket, gen_deboss, gen_deboss_with_hole,
+                gen_large_features):
         gen()
     manifest_path = os.path.join(OUT, "manifest.json")
     json.dump(MANIFEST, open(manifest_path, "w"), indent=1)

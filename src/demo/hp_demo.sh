@@ -18,10 +18,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HP_SAMPLES="${HP_SAMPLES:-}"
 
 # name | file | rules | what it shows
-ALL="ref_protrusions,rib_simplify,pin_tip,boss,ref_holes,ref_fillets,chamfer_edge,logo"
+ALL="ref_protrusions,rib_simplify,pin_tip,boss,ref_holes,ref_fillets,chamfer_edge,logo,deboss"
 SAMPLES=(
   "pin|Boss_dol_to_keep_and_remove.step|$ALL|a locating pin is kept, its tapered tip becomes a plain cylinder (the bore inside stays closed)"
-  "boss|Boss_to_remove.step|$ALL|two rounded edges at a stamped boss are made square"
+  "boss|Boss_to_remove.step|$ALL|a stamped round recess with a pad inside (emboss / deboss) is filled flat, leaving the plain plate"
   "fillet1|Fillet1.stp|$ALL|rounded edges"
   "fillet2|Fillet2.stp|$ALL|rounded edge"
   "hole1|Hole1.stp|$ALL|nothing is removed: round holes are always kept"

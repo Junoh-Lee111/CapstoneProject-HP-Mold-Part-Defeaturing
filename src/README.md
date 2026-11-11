@@ -5,7 +5,7 @@ The code is split into layers (folders). Architecture modules C1-C9 are in brack
 | Folder | Layer | What is in it |
 |---|---|---|
 | `input/` | Input [C1-C3] | *(planned)* STEP reading, B-rep face extraction, face-adjacency graph for the ML step. See its README. |
-| `rules/` | Rules [C4, C5] | What to remove, grouped by what it recognises: `holes.py`, `edges.py` (fillets, chamfers), `protrusions.py` (ribs, bosses, repeated bumps), `markings.py` (logos). Today rule-based; the ML recognition will plug in here. |
+| `rules/` | Rules [C4, C5] | What to remove, grouped by what it recognises: `holes.py`, `edges.py` (fillets, chamfers), `protrusions.py` (ribs, bosses, repeated bumps), `markings.py` (logos, shallow recesses / debosses). Today rule-based; the ML recognition will plug in here. |
 | `engine/` | Engine [C5-C7] | `cleancad_core.py` (select, group, remove, verify, failure handling, profiles), `defeature_worker.py` (guarded removal process with a time limit), `geom_utils.py` (shared geometry helpers). |
 | `output/` | Output [C7, C9] | *(planned)* result STEP, failure records, report. Today the scripts write these straight into `~/Documents/CleanCAD_Workspace/`. See its README. |
 | `demo/` | Screen [C8] | `demo_freecad.py` (interactive FreeCAD demo), `fcdemo.sh` (launcher for any file), `hp_demo.sh` (launcher for the HP sample parts with the rules that suit each). |

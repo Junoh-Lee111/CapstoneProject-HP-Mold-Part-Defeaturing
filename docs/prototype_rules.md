@@ -43,6 +43,7 @@ The code is organised the same way: one module per group in `src/rules/` (`holes
 | | `boss` | round columns standing on a flat host, up to the max. diameter. Kept: a boss with a hole through it, a boss with a round bore on its own axis, and a pin with a free-form body | ours |
 | | `pin_tip` | the tapered tip of a shaped pin (everything above its straight cylinder wall); it is replaced by a plain cylinder of the pin's radius up to the old tip height, so a bore that ends inside the tip is not opened | ours |
 | **Markings** | `logo` | engravings and embosses: faces bundled from the non-circular inner wires of a flat host, shallow only | HP's logo rule description, plus our depth cap |
+| | `deboss` | a shallow CLOSED pocket in a flat face (mentor: Emboss / Deboss: Remove), e.g. a round recess with a pad inside that rises back to the plate surface; the whole pocket is filled. Kept: a pocket with a hole through its floor (screw seat), anything that stands above the host plane, a pocket deeper than 0.35 x its opening, solid-less surface models | ours, from the mentor's 10/20 answers |
 | *(test scaffolding)* | `cyl`, `prot`, `recess`, `chamfer`, `fail_demo` | the original rules, tied to the shape of the generated test parts | ours (test scaffolding) |
 
 How `logo` works (HP's description): start at the inner wires of a planar face; a wire that is a single circle
@@ -51,6 +52,12 @@ edge adjacency for at most 3 steps through faces smaller than 20 % of the host a
 wire size; reject a bundle larger than 25 % of the host; skip a wire that has a matching inner boundary on the
 opposite plane (a through cut). Our own addition: a depth cap of 0.5 mm, so that a blind pocket is not taken for a
 marking.
+
+How `deboss` works (ours): start at an inner wire of a flat host face and follow the faces behind it without ever
+crossing the host. Accepted only when that group touches the host through this one wire (a through hole or slot
+reaches the other side), nothing of it stands above the host plane, its depth is at most 0.35 x the opening, it has
+at most 40 faces and covers less than 80 % of the host. Check: HP sample Boss_to_remove 14 -> 8 faces (recess
+and pad filled, +44 mm3); generated cases `deboss` and `deboss_with_hole`.
 
 ## 3. Safety guard
 
