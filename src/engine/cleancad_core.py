@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -27,25 +28,27 @@ CATEGORY = {}    # rule name -> what it recognises: holes / edges / protrusions 
 BATCH = {}       # name -> "try" | "only": remove ALL faces the rule selects in one operation
 #                  ("try": fall back to per-feature removal on failure; "only": all-or-nothing)
 
-# Size thresholds are configuration (the mentor: "should not be treated as a universal rule").
-PROFILES = {
-    # example parameters of the HP-supplied script (hard_7); NOT general criteria
-    "hp_example": {"hole_diameter": 6.0, "fillet_radius": 10.0, "logo_max_depth": 0.5,
-                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
-    # recognition-only evaluation: size limits so wide that no real feature is filtered out by size
-    "recognition_only": {"hole_diameter": 50.0, "fillet_radius": 50.0, "logo_max_depth": 0.5,
-                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
-    # HP: when fastener holes must be kept, remove only holes of 2 mm or less (fasteners are ~2.7 mm).
-    # fillet value is the earlier mentor starting value, still to be confirmed.
-    "keep_fasteners": {"hole_diameter": 0.0, "fillet_radius": 5.0, "logo_max_depth": 0.5,
-                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
-}
-PROFILE = dict(PROFILES[os.environ.get("CLEANCAD_PROFILE", "hp_example")])
+# Size thresholds are configuration (the mentor: "should not be treated as a universal rule"). They live in
+# the settings package (pure Python, shared with the screen and the ML code); PROFILE is what the rules read.
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../src
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+import settings  # noqa: E402
+
+PROFILES = {name: settings.effective(values) for name, values in settings.BUILTIN_PRESETS.items()}
+PROFILE = dict(PROFILES[os.environ.get("CLEANCAD_PROFILE", settings.DEFAULT_PRESET)])
 
 
 def set_profile(name):
+    """Use a preset (built-in or saved by the user) as the live profile."""
     PROFILE.clear()
-    PROFILE.update(PROFILES[name])
+    PROFILE.update(PROFILES[name] if name in PROFILES else settings.effective(settings.load_preset(name)))
+
+
+def apply_settings(values):
+    """Use a settings dict (see the settings package) as the live profile: what the screen's panel calls."""
+    PROFILE.clear()
+    PROFILE.update(settings.effective(values))
 
 
 def rule(name, category="scaffolding"):
@@ -195,6 +198,8 @@ def groups(shape, faces):
 # skips that feature and carries on (the limit is scaled up for models of more than 500 faces).
 # In the GUI the call runs in-process without a limit.
 DEFEATURE_TIMEOUT = float(os.environ.get("CLEANCAD_DEFEATURE_TIMEOUT", "60"))   # seconds; 0 = off
+GUARD_IN_GUI = False     # True: the GUI too sends each removal to the worker process (the Studio does, so a stuck
+#                          kernel call cannot freeze the window; it costs a little time per removal)
 
 
 class WorkerUnavailable(Exception):
@@ -303,7 +308,7 @@ def _judge(group, new_shape):
 
 def _attempt(shape, group, timeout, delay=0, tool=None):
     """One removal attempt (defeaturing, or cutting `tool` away). -> (state, new_shape, result dict | message)"""
-    if timeout > 0 and not FreeCAD.GuiUp:
+    if timeout > 0 and (not FreeCAD.GuiUp or GUARD_IN_GUI):
         try:
             state, res = _WORKER.run(shape, group, timeout, delay, tool)
         except WorkerUnavailable:

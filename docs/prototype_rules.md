@@ -75,7 +75,7 @@ defeaturing for their own features (`pin_tip`, `rib_simplify`).
 
 - `gen_examples.py` builds 14 simple generated parts (holes, fillets, ribs, chamfer, boss, emboss, engraved and
   embossed text, and negative cases that must stay unchanged) and records, per part, which faces are the ground truth.
-- `run_headless.py`: every part must give the expected face count and volume (24/24 with the original and the
+- `run_headless.py`: every part must give the expected face count and volume (28/28 with the original and the
   generic rules). `evaluate_rules.py`: face-level precision/recall per rule set -> `logs/evaluation.md`.
 - Result on the generated parts: holes, fillets, ribs, chamfers and text logos are found; negative cases are left
   alone. **These parts are simple and made by us - the numbers say nothing about general accuracy.**
