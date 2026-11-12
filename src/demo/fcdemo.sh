@@ -28,5 +28,9 @@ elif [ -n "${1:-}" ]; then
   export CLEANCAD_ONLY="$1"
 fi
 
-nohup "$FREECAD_APP/Contents/MacOS/FreeCAD" "$SCRIPT_DIR/demo_freecad.py" >/dev/null 2>&1 &
+# one file: the Studio (original left, result right, live, settings dock); CLEANCAD_STEP=1 or an example name: the
+# step-by-step demo with the animations
+SCRIPT="demo_freecad.py"
+if [ "$IS_FILE" = 1 ] && [ "${CLEANCAD_STEP:-0}" != 1 ]; then SCRIPT="studio_freecad.py"; fi
+nohup "$FREECAD_APP/Contents/MacOS/FreeCAD" "$SCRIPT_DIR/$SCRIPT" >/dev/null 2>&1 &
 echo "FreeCAD launched. Results under: ${CLEANCAD_WORKDIR:-$HOME/Documents/CleanCAD_Workspace}"

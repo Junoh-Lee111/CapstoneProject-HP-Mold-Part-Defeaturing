@@ -22,10 +22,12 @@ from PySide import QtCore, QtGui, QtWidgets
 
 WORKDIR = os.environ.get("CLEANCAD_WORKDIR", os.path.expanduser("~/Documents/CleanCAD_Workspace"))
 _SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../src
-for _p in (_SRC, os.path.join(_SRC, "engine")):                       # layers: engine/, rules/, ...
+for _p in (_SRC, os.path.join(_SRC, "engine"), os.path.dirname(os.path.abspath(__file__))):   # layers + this folder
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import cleancad_core as core
+import panel as settings_panel
+import settings
 
 DELAY_MS = int(os.environ.get("CLEANCAD_DELAY_MS", "1200"))
 FAIL_HOLD_MS = int(os.environ.get("CLEANCAD_FAIL_HOLD_MS", "4500"))
@@ -260,6 +262,8 @@ def declutter():
     overlays = [w for w in main.findChildren(QtWidgets.QWidget)
                 if "Overlay" in w.metaObject().className() or "TaskView" in w.metaObject().className()]
     for widget in main.findChildren(QtWidgets.QDockWidget) + overlays:
+        if widget.objectName() == settings_panel.PANEL_NAME:
+            continue                                         # our own settings panel stays
         if widget.isVisible():
             if widget not in _hidden:
                 _hidden.append(widget)
@@ -502,6 +506,11 @@ def start(index):
     before.ViewObject.DisplayMode = "Flat Lines"
     before.ViewObject.Visibility = False  # only revealed on the result screen, after the live removal
     log(f"START {job['name']} rules={job['rules']} faces={len(obj.Shape.Faces)}")
+    try:
+        show_settings_panel()
+    except Exception:                                        # noqa: BLE001  the demo works without the panel
+        import traceback
+        log("ERROR in show_settings_panel:\n" + traceback.format_exc())
 
     def refocus(i):
         if state.get("index") == i and ensure_active():
@@ -511,6 +520,69 @@ def start(index):
     for delay in (400, 1500, 3000, 5000, 8000):  # the Start page may appear a few seconds after launch
         QtCore.QTimer.singleShot(delay, lambda i=index: refocus(i))
     QtCore.QTimer.singleShot(900, interactive_begin if INTERACTIVE else step)
+
+
+_panel_ref = {}
+
+
+def show_settings_panel():
+    """The left panel with the removal limits (src/settings): created once, then kept for the next model."""
+    main = Gui.getMainWindow()
+    panel = _panel_ref.get("panel")
+    job = state["job"]
+    if panel is None:
+        preset = os.environ.get("CLEANCAD_PROFILE", settings.DEFAULT_PRESET)
+        panel = settings_panel.Panel(main, job["rules"], preset, lambda: state.get("phase"),
+                                     lambda: len(state.get("sel", ())), apply_settings)
+        _panel_ref["panel"] = panel         # a tool window on the left edge of the main window
+        g = main.geometry()
+        panel.setGeometry(g.x() + 6, g.y() + 150, 340, max(560, g.height() - 230))
+    panel.set_job(job["name"], job["rules"])
+    panel.setVisible(True)
+    panel.raise_()
+    if os.environ.get("CLEANCAD_PANEL_TEST") == "1":
+        QtCore.QTimer.singleShot(3000, _panel_test)
+
+
+def _panel_test():
+    """Unattended check of the panel (CLEANCAD_PANEL_TEST=1): picture of the panel, then the limits are changed and
+    applied before and on the selection screen; the counts go to the log."""
+    panel = _panel_ref["panel"]
+    panel.grab().save(os.path.join(WORKDIR, "snapshots", "panel_00.png"))
+    go_next()                                       # -> automatic selection with the preset's limits
+    QtCore.QTimer.singleShot(2500, _panel_test_2)
+
+
+def _panel_test_2():
+    panel = _panel_ref["panel"]
+    log(f"PANELTEST selection with preset: {len(state['sel'])} faces")
+    panel.spins["fillet_radius"].setValue(0.1)       # no fillet is that small
+    panel._apply()
+    log(f"PANELTEST fillet_radius 0.1 applied: {len(state['sel'])} faces, profile {core.PROFILE['fillet_radius']}")
+    panel.spins["fillet_radius"].setValue(10.0)
+    panel.row_boxes["fillet_radius"].setChecked(False)   # fillet rule off
+    panel._apply()
+    log(f"PANELTEST fillet rule off: {len(state['sel'])} faces, rules {state['job']['rules']}")
+    panel.row_boxes["fillet_radius"].setChecked(True)
+    panel._apply()
+    log(f"PANELTEST fillet rule on, radius 10: {len(state['sel'])} faces")
+    panel.grab().save(os.path.join(WORKDIR, "snapshots", "panel_01.png"))
+
+
+def apply_settings(values, rules):
+    """Called by the panel: use these limits and this rule list for the selection. Only before the removal starts
+    (original model or selection screen); on the selection screen the automatic selection is made again, so
+    clicks made by hand are dropped."""
+    phase = state.get("phase")
+    if phase not in ("orig", "select"):
+        return False
+    core.apply_settings(values)
+    state["job"]["rules"] = list(rules)
+    log(f"SETTINGS applied: {core.PROFILE} rules={rules}")
+    if phase == "select":
+        state.update(auto=set(), sel=set(), failed=set(), warning=False)
+        go_select()
+    return True
 
 
 def finish():
@@ -1048,6 +1120,8 @@ def go_next():
 class _Keys(QtCore.QObject):
     def eventFilter(self, obj, event):
         if event.type() == QtCore.QEvent.KeyPress and state.get("phase"):
+            if settings_panel.contains(QtWidgets.QApplication.focusWidget()):
+                return False                # typing in the settings panel (numbers, arrows) is not a demo step
             key = event.key()
             if event.isAutoRepeat():       # a held key must not run through all the steps
                 return key in (QtCore.Qt.Key_Right, QtCore.Qt.Key_Down, QtCore.Qt.Key_Space,

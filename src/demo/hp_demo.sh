@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HP_SAMPLES="${HP_SAMPLES:-}"
 
 # name | file | rules | what it shows
-ALL="ref_protrusions,rib_simplify,pin_tip,boss,ref_holes,ref_fillets,chamfer_edge,logo,deboss"
+ALL="ref_protrusions,rib,pin_tip,boss,ref_holes,ref_fillets,chamfer_edge,logo,deboss"
 SAMPLES=(
   "pin|Boss_dol_to_keep_and_remove.step|$ALL|a locating pin is kept, its tapered tip becomes a plain cylinder (the bore inside stays closed)"
   "boss|Boss_to_remove.step|$ALL|a stamped round recess with a pad inside (emboss / deboss) is filled flat, leaving the plain plate"
@@ -28,7 +28,7 @@ SAMPLES=(
   "hole2|Hole2.stp|$ALL|one small face goes, the hole stays"
   "hole3|Hole3.stp|$ALL|rounded corner; the camera turns to features on the back"
   "hole4|Hole4.stp|$ALL|ring around a fastener hole and the hole stay, the stepped round goes"
-  "rib|PH_rib_to_remove.step|$ALL|rounded ribs become rectangular ribs (no gap at the bend)"
+  "rib|PH_rib_to_remove.step|$ALL|ribs on a plate are removed (mentor: Rib: Remove); the other sample, Ph_rib_to_keep, must keep its ribs"
   "logo1|Logoes_Press_01.step|$ALL|press-part logos on an open shell (two sheets); a small stub at the sheet edge remains"
   "logo2|Logoes_Press_02_X01.step|$ALL|press-part logos on an open shell"
   "chamfer|chamfer_001_Remove.step|$ALL|LIMIT: free-form chamfer, only part of it can be removed after ~35 s of retries (failure is reported)"
