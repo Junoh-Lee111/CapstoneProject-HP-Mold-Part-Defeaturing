@@ -1,13 +1,21 @@
-CleanCAD Environment and Pipeline Basic Check
-Tester: Elias
-Date: November 5, 2026
-Environment
-Windows 10
-FreeCAD 1.1.4
-Python console
-Objective
-Verify that FreeCAD can load CAD examples and perform basic geometry and defeaturing checks. This report does not measure feature-recognition accuracy.
-Test Results
+# CleanCAD Environment and Pipeline Basic Check
+
+**Tester:** Elias
+**Date:** November 5, 2026
+
+## 1. Testing Environment
+
+- **Operating System:** Windows 10
+- **FreeCAD Version:** 1.1.4
+- **Interface:** Python Console
+
+## 2. Objective
+
+Verify that FreeCAD can load CAD examples and perform basic geometry and defeaturing checks.
+
+This report does not measure feature-recognition accuracy.
+
+## 3. Test Results
 | Test | Input file | Expected | Actual | Pass/Fail |
 |---|---|---|---|---|
 | Plain plate | Repository example (path to confirm) | 6 faces, 18000 mm³ | Matches team reference | PASS (team-confirmed) |
