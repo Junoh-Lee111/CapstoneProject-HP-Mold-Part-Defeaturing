@@ -27,10 +27,11 @@ FIELD_RULES = {
     "logo_max_depth": ("logo",),
     "boss_max_diameter": ("boss",),
     "rib_max_thickness": ("rib", "rib_simplify"),
+    "bump_max_size": ("bump",),
 }
 _MAPPED = {r for rules in FIELD_RULES.values() for r in rules}
 OTHER_RULE_TEXT = {"ref_protrusions": "Repeated pressed bumps", "pin_tip": "Pin tips (made plain)",
-                   "deboss": "Shallow recesses / debosses"}
+                   "flatten": "Shallow recesses (filled flat)", "deboss": "Shallow recesses (filled flat)"}
 LOCKED_NOTE = "Limits can be changed before the removal starts (press ← to come back to the selection)."
 
 STYLE = """
@@ -140,6 +141,23 @@ class Panel(QtWidgets.QWidget):
                              + ("" if self._ml else "No ML recognizer is connected yet: the rules always report 1.0."))
         lay.addWidget(rec)
 
+        # ---- performance --------------------------------------------------------------------------
+        perf, inner_p = self._section("PERFORMANCE")
+        prow = QtWidgets.QHBoxLayout()
+        inner_p.addLayout(prow)
+        tb = settings.PERFORMANCE[0]
+        prow.addWidget(QtWidgets.QLabel(tb.label))
+        self.budget = QtWidgets.QDoubleSpinBox()
+        self.budget.setRange(tb.minimum, tb.maximum)
+        self.budget.setSingleStep(tb.step)
+        self.budget.setDecimals(0)
+        self.budget.setSuffix(" s")
+        self.budget.setSpecialValueText("no limit")
+        self.budget.setToolTip(tb.hint)
+        self.budget.valueChanged.connect(self._changed)
+        prow.addWidget(self.budget)
+        lay.addWidget(perf)
+
         # ---- actions ------------------------------------------------------------------------------
         self.live_box = QtWidgets.QCheckBox("Live update")
         self.live_box.setToolTip("The result follows every change at once. Switch off for big models and press Apply.")
@@ -243,6 +261,7 @@ class Panel(QtWidgets.QWidget):
         v = {k: spin.value() for k, spin in self.spins.items()}
         v["keep_fasteners"] = self.keep_box.isChecked()
         v["min_confidence"] = self.conf.value()
+        v["time_budget"] = self.budget.value()
         return settings.normalise(v)
 
     def active_rules(self):
@@ -256,13 +275,14 @@ class Panel(QtWidgets.QWidget):
 
     def _load(self, preset):
         v = settings.load_preset(preset)
-        group = list(self.spins.values()) + list(self.row_boxes.values()) + [self.keep_box, self.conf]
+        group = list(self.spins.values()) + list(self.row_boxes.values()) + [self.keep_box, self.conf, self.budget]
         for w in group:
             w.blockSignals(True)
         for k, spin in self.spins.items():
             spin.setValue(v[k])
         self.keep_box.setChecked(v["keep_fasteners"])
         self.conf.setValue(v["min_confidence"])
+        self.budget.setValue(v["time_budget"])
         for key in FIELD_RULES:
             self.row_boxes[key].setChecked(self._used(key))
         for w in group:
@@ -333,7 +353,7 @@ class Panel(QtWidgets.QWidget):
                                        and not (key == "hole_diameter" and self.keep_box.isChecked()))
         for r, box in self.other_boxes.items():
             box.setEnabled(editable and r in self.all_rules)
-        for w in (self.keep_box, self.preset_box, self.apply_btn):
+        for w in (self.keep_box, self.preset_box, self.apply_btn, self.budget):
             w.setEnabled(editable)
         self.conf.setEnabled(editable and self._ml)
         if phase and not editable:

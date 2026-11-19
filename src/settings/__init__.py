@@ -7,5 +7,5 @@ Pure Python (no FreeCAD), so the rules, the screen, the ML code and the tests ca
   effective(values)  what the rules actually read (core.PROFILE): e.g. 'keep fastener holes' forces hole limit 0
   list_presets / load_preset / save_preset   user presets, stored as JSON under $CLEANCAD_WORKDIR/presets
 """
-from .presets import (FIELDS, SWITCHES, CONFIDENCE, BUILTIN_PRESETS, DEFAULT_PRESET, effective, normalise,  # noqa: F401
+from .presets import (FIELDS, PERFORMANCE, SWITCHES, CONFIDENCE, BUILTIN_PRESETS, DEFAULT_PRESET, effective, normalise,  # noqa: F401
                       presets_dir, list_presets, load_preset, save_preset)

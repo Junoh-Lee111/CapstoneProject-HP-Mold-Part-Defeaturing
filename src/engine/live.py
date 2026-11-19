@@ -24,7 +24,15 @@ class Result:
 
 
 def remove_selected(shape, selected, budget=None):
-    """selected: set of face signatures (cleancad_core.sig) of `shape`. budget: seconds after which the rest is skipped."""
+    """selected: set of face signatures (cleancad_core.sig) of `shape`. budget: seconds after which the rest is skipped
+    (default: the profile's time_budget, 0 = none). Every removal attempt inside obeys it too (core.time_budget)."""
+    if budget is None:
+        budget = core.PROFILE.get("time_budget", 0) or None
+    with core.time_budget(budget):
+        return _remove_selected(shape, selected, budget)
+
+
+def _remove_selected(shape, selected, budget):
     t0 = time.monotonic()
     res = Result(shape)
     selected = set(selected)

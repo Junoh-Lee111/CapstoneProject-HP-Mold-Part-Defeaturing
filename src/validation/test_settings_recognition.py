@@ -89,4 +89,22 @@ check("the engine removes what the recognizer found, no engine change needed",
       len(final.Faces) < len(shape.Faces) and final.isValid() and not failures,
       f"faces {len(shape.Faces)} -> {len(final.Faces)}")
 
+# ---- time budget ------------------------------------------------------------------------------------------
+check("time budget is part of the settings and stays in its range",
+      settings.effective({"time_budget": 30})["time_budget"] == 30.0 and settings.normalise({"time_budget": 9999})["time_budget"] == 600.0
+      and settings.BUILTIN_PRESETS["hp_example"]["time_budget"] == 60.0)
+check("no budget in force outside a run", core.budget_left() is None and not core.out_of_time())
+with core.time_budget(5):
+    inside = core.budget_left()
+check("time_budget() sets a budget inside and restores 'none' after", inside is not None and 0 < inside <= 5 and core.budget_left() is None)
+core.set_profile("keep_fasteners")
+core.PROFILE["time_budget"] = 1e-9          # used up before the first removal
+final2, removed2, failures2 = core.process(shape, ["ref_fillets", "ref_holes"])
+check("a used-up budget skips the rest and says so, the shape stays as it was",
+      len(final2.Faces) == len(shape.Faces) and failures2 and all(str(f["reason"]).startswith("skipped: time budget") for f in failures2),
+      f"{[f['reason'] for f in failures2]}")
+core.PROFILE["time_budget"] = 0
+final3, removed3, failures3 = core.process(shape, ["ref_fillets", "ref_holes"])
+check("with no budget the same run removes the features", len(final3.Faces) < len(shape.Faces) and not failures3)
+
 print(f"SUMMARY {sum(RESULTS)}/{len(RESULTS)} PASS")

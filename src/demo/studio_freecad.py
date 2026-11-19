@@ -34,7 +34,6 @@ import panel as settings_panel  # noqa: E402
 GRAY, RED, ORANGE = (0.75, 0.78, 0.82), (0.85, 0.12, 0.12), (1.0, 0.55, 0.0)
 DOCK_NAME = "CleanCADDock"
 LIVE_MAX_FACES = 150           # bigger models start with Live update off (every change would take long)
-UPDATE_BUDGET = 120.0          # seconds for one update; what is not removed by then is reported
 VOLUME_WARN = 5.0              # percent
 S = {}                         # the state of the session
 
@@ -203,7 +202,7 @@ def update():
     try:
         S["panel"].set_status("Processing…")
         Gui.updateGui()
-        res = live.remove_selected(S["source"], selection(), budget=UPDATE_BUDGET)
+        res = live.remove_selected(S["source"], selection())     # within the profile's time budget
         S["result"] = res
         S["or"].Shape = res.shape
         S["dr"].recompute()
@@ -303,7 +302,7 @@ def start():
     open(os.path.join(WORKDIR, "logs", f"{S['name']}_studio.log"), "w").close()
     log(f"START {file} faces={len(source.Faces)} rules={rules} preset={preset}")
     core.apply_settings(settings.load_preset(preset))
-    core.GUARD_IN_GUI = len(source.Faces) > LIVE_MAX_FACES    # big models: a stuck kernel call must not freeze the window
+    core.GUARD_IN_GUI = True       # every removal runs in the guarded worker: a stuck kernel call cannot freeze the window
 
     S["dl"] = App.newDocument("Original")
     S["ol"] = S["dl"].addObject("Part::Feature", "Original")
@@ -368,6 +367,7 @@ def test_sequence():
     """Unattended check (CLEANCAD_STUDIO_TEST=1): pictures and counts go to snapshots/ and the log."""
     p = S["panel"]
     snapshot("00_start")
+    p.grab().save(os.path.join(WORKDIR, "snapshots", f"{S['name']}_studio_panel.png"))      # the panel alone
     log(f"TEST start: selected {len(selection())} faces, result faces {len(S['result'].shape.Faces)}")
     p.spins["fillet_radius"].setValue(0.1)
     p._apply()
