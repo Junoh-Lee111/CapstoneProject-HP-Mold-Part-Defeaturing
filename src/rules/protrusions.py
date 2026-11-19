@@ -18,7 +18,7 @@ import cleancad_core as core  # noqa: E402
 from collections import Counter  # noqa: E402
 
 from geom_utils import (Topo, stype, flatten, face_points, plane_frame, box2d, is_circle_wire,  # noqa: E402,F401
-                        angle_deg, owners_index, connected, GEOM_TOL, TWO_PI)
+                        angle_deg, owners_index, connected, inward_cylinder, sweep, GEOM_TOL, TWO_PI)
 
 # --- HP-example style repeated protrusions
 MIN_SUPPORT_AREA = 500.0
@@ -139,6 +139,16 @@ def protrusion_bundles(shape):
             pts_cache[i] = face_points(t.faces[i])
         return pts_cache[i]
 
+    bores = {}
+
+    def bore_wall(i):
+        """A complete round hole wall. A hole is never part of a boss or a rib: the hole rules decide on it
+        (a boss keeps the hole that runs through it)."""
+        if i not in bores:
+            f = t.faces[i]
+            bores[i] = stype(f) == "Cylinder" and sweep(f) >= TWO_PI - 1e-5 and inward_cylinder(f)
+        return bores[i]
+
     out = []
     for h, host in enumerate(t.faces):
         if t.plane(h) is None or t.area[h] < MIN_HOST_AREA:
@@ -157,7 +167,7 @@ def protrusion_bundles(shape):
             while frontier:
                 nxt = set()
                 for f in frontier:
-                    if f in bundle or f == h:
+                    if f in bundle or f == h or bore_wall(f):
                         continue
                     hs = heights(f)
                     if not hs or min(hs) < -BELOW_TOL:
@@ -194,13 +204,36 @@ def protrusion_bundles(shape):
             length = max(wb[1] - wb[0], wb[3] - wb[2])
             if is_circle_wire(wire):
                 kind = "boss" if 2 * wire.Edges[0].Curve.Radius <= boss_max else None
+                # a boss with a hole through it (a ring around a fastener hole) is a functional feature: it stays
+                if kind and any(len(t.faces[f].Wires) > 1 for f in tops):
+                    kind = None
+                # a boss with a round bore on its own axis running up into it (a pin pressed or screwed from
+                # behind, or the pin whose tip was just simplified) is functional: it stays
+                if kind == "boss" and not any(stype(t.faces[f]) == "BSplineSurface" for f in bundle):
+                    axis = wire.Edges[0].Curve
+                    for j in range(len(t.faces)):
+                        if not bore_wall(j):
+                            continue
+                        c = t.faces[j].Surface
+                        off = c.Center - axis.Center
+                        off = off - n * off.dot(n)
+                        if (abs(abs(c.Axis.dot(n)) - 1) < 1e-6 and off.Length < 1e-3
+                                and max(heights(j)) > BELOW_TOL):
+                            kind = None
+                            break
+                # a pin with a free-form (tapered, shaped) body is a locating pin, not a plain boss: it stays,
+                # only its shaped tip (everything above the straight cylinder wall) is simplified
+                if kind and any(stype(t.faces[f]) == "BSplineSurface" for f in bundle):
+                    kind = "pin"
             elif thickness <= rib_max and length >= RIB_MIN_LENGTH_FACTOR * thickness:
                 kind = "rib"
             else:
                 kind = None
             if kind:
+                walls = [max(heights(f)) for f in bundle if stype(t.faces[f]) == "Cylinder"]
                 out.append({"kind": kind, "host": h, "faces": sorted(bundle), "height": height,
-                            "thickness": thickness, "length": length})
+                            "thickness": thickness, "length": length,
+                            "base_h": max(walls) if kind == "pin" and walls else 0.0})
         # ribs that reach the edge of the host: components of the faces standing on the host plane,
         # started from the OUTER wire (the faces below the plane are the plate itself and never qualify).
         # The host may be a gently bent sheet: faces are also measured against the neighbouring flat
@@ -234,7 +267,7 @@ def protrusion_bundles(shape):
             while stack:
                 x = stack.pop()
                 for y in t.nb[x]:
-                    if y in near or y in comp or y in taken:
+                    if y in near or y in comp or y in taken or bore_wall(y):
                         continue
                     s_y = support(y, sup[x])
                     if s_y is not None:
@@ -294,12 +327,42 @@ def cut_protrusion(shape, group):
             box = box2d(pts, u, v)
             margin = 0.3
             a0, b0 = box[0] - margin, box[2] - margin
+            z0 = b.get("base_h", 0.0)       # a pin is cut only above its straight wall
             prism = __import__("Part").makeBox(box[1] - box[0] + 2 * margin, box[3] - box[2] + 2 * margin,
-                                               b["height"] + 1.0)
-            corner = u * a0 + v * b0 + n * origin.dot(n)
+                                               b["height"] + 1.0 - z0)
+            corner = u * a0 + v * b0 + n * (origin.dot(n) + z0)
             prism.Placement = Placement(Matrix(u.x, v.x, n.x, corner.x, u.y, v.y, n.y, corner.y,
                                                u.z, v.z, n.z, corner.z, 0, 0, 0, 1))
             return prism
+    return None
+
+
+@core.pre_removal
+def fill_pin_tip(shape, group):
+    """A shaped pin's tip is replaced by a plain cylinder of the pin's radius up to the old tip height. (Plain
+    defeaturing would just cut the tip off and open the bore that ends inside it.)"""
+    import Part
+    wanted = {core.sig(f) for f in group}
+    t, bundles = protrusion_bundles(shape)
+    for b in bundles:
+        if b["kind"] != "pin" or not wanted <= {core.sig(t.faces[i]) for i in b["faces"]}:
+            continue
+        wall = [t.faces[i] for i in b["faces"] if stype(t.faces[i]) == "Cylinder"]
+        if not wall:
+            return None
+        surf = wall[0].Surface
+        origin, n, u, v = plane_frame(t.faces[b["host"]], t.plane(b["host"]))
+        c = surf.Center
+        base = c - n * (c - origin).dot(n) + n * b["base_h"]
+        try:
+            cut = cut_protrusion(shape, group)
+            if cut is None:
+                return None
+            body = shape.cut(cut)
+            plug = Part.makeCylinder(surf.Radius, b["height"] - b["base_h"] + 1e-3, base, n)
+            return ("result", body.fuse(plug).removeSplitter())
+        except Exception:               # noqa: BLE001
+            return None
     return None
 
 
@@ -313,6 +376,137 @@ def _protrusions(shape):
 def _rib(shape):
     t, bundles = protrusion_bundles(shape)
     return [t.faces[i] for i in sorted({i for b in bundles if b["kind"] == "rib" for i in b["faces"]})]
+
+
+@core.set_rule("pin_tip", category="protrusions")
+def _pin_tip(shape):
+    """Shaped locating pins stay; their tapered tip (all faces above the straight cylinder wall) is cut flat."""
+    t, bundles = protrusion_bundles(shape)
+    return [t.faces[i] for b in bundles if b["kind"] == "pin" for i in b["faces"]
+            if stype(t.faces[i]) != "Cylinder"]
+
+
+_SIMPLIFY = set()      # signatures of the faces the last rib_simplify selection chose (see squarize_rib)
+
+
+def _curved_ribs(shape):
+    t, bundles = protrusion_bundles(shape)
+    return t, [b for b in bundles if b["kind"] == "rib" and any(stype(t.faces[i]) != "Plane" for i in b["faces"])]
+
+
+@core.set_rule("rib_simplify", category="protrusions")
+def _rib_simplify(shape):
+    """Ribs with rounded / free-form faces are not removed but made rectangular (see squarize_rib)."""
+    t, bundles = _curved_ribs(shape)
+    faces = [t.faces[i] for i in sorted({i for b in bundles for i in b["faces"]})]
+    _SIMPLIFY.clear()
+    _SIMPLIFY.update(core.sig(f) for f in faces)
+    return faces
+
+
+def _restart(wire, vertex):
+    """The wire with its edge order rotated so that it starts at `vertex`."""
+    edges = list(wire.OrderedEdges)
+    k = next((n for n, e in enumerate(edges) if e.Vertexes[0].Point.distanceToPoint(vertex.Point) < 1e-6
+              or e.Vertexes[-1].Point.distanceToPoint(vertex.Point) < 1e-6), 0)
+    import Part
+    return Part.Wire(edges[k:] + edges[:k])
+
+
+SQUARE_EMBED = 0.5      # the box reaches this far into the host so that it fuses with it
+
+
+@core.pre_removal
+def squarize_rib(shape, group):
+    """Replace a rounded rib by a rectangular one: the rib faces are removed as usual, then, for every rib
+    segment (a rib that runs over a bend is one segment per flat host), the oriented rectangle that
+    encloses its footprint is fused back on, standing on the host up to the rib's height."""
+    import Part
+    from FreeCAD import Matrix, Placement, Vector
+    wanted = {core.sig(f) for f in group}
+    if not wanted & _SIMPLIFY:
+        return None
+    t, bundles = _curved_ribs(shape)
+    mine = [b for b in bundles
+            if len(wanted & {core.sig(t.faces[i]) for i in b["faces"]}) * 2 >= len(b["faces"])]
+    if not mine:
+        return None
+    segs = []
+    for b in mine:
+        origin, n, u, v = plane_frame(t.faces[b["host"]], t.plane(b["host"]))
+        pts = [(((p - origin).dot(u)), ((p - origin).dot(v))) for i in b["faces"] for p in face_points(t.faces[i])]
+        cx, cy = sum(a for a, _ in pts) / len(pts), sum(c for _, c in pts) / len(pts)
+        sxx = sum((a - cx) ** 2 for a, _ in pts)
+        syy = sum((c - cy) ** 2 for _, c in pts)
+        sxy = sum((a - cx) * (c - cy) for a, c in pts)
+        ang = 0.5 * math.atan2(2 * sxy, sxx - syy)            # long axis of the footprint
+        d, e = u * math.cos(ang) + v * math.sin(ang), v * math.cos(ang) - u * math.sin(ang)
+        da = [(p[0] - cx) * math.cos(ang) + (p[1] - cy) * math.sin(ang) for p in pts]
+        ea = [-(p[0] - cx) * math.sin(ang) + (p[1] - cy) * math.cos(ang) for p in pts]
+        mid = origin + u * cx + v * cy + d * (min(da) + max(da)) / 2 + e * (min(ea) + max(ea)) / 2
+        segs.append({"o": origin, "n": n, "d": d, "e": e, "c": (origin + u * cx + v * cy), "mid": mid,
+                     "a": [min(da), max(da)], "w": [min(ea), max(ea)], "h": b["height"]})
+    def make_box(sg):
+        d, e, n = sg["d"], sg["e"], sg["n"]
+        corner = sg["c"] + d * sg["a"][0] + e * sg["w"][0] - n * SQUARE_EMBED
+        box = Part.makeBox(sg["a"][1] - sg["a"][0], sg["w"][1] - sg["w"][0], sg["h"] + SQUARE_EMBED)
+        box.Placement = Placement(Matrix(d.x, e.x, n.x, corner.x, d.y, e.y, n.y, corner.y,
+                                         d.z, e.z, n.z, corner.z, 0, 0, 0, 1))
+        return box
+
+    boxes = [make_box(sg) for sg in segs]
+    boxes = [make_box(sg) for sg in segs]
+    # Two neighbouring segments of one rib (on hosts at a slight angle to each other) are built from ONE shared
+    # cross-section at the bend: the first segment's rectangle cut by the plane that bisects the bend. Both
+    # segments are prisms from that rectangle, so they meet exactly: no gap, no overlap, no extra edges.
+    pairs = [(i, j) for i in range(len(segs)) for j in range(i + 1, len(segs))
+             if boxes[i].distToShape(boxes[j])[0] <= 1.0]
+    used = set()
+    pieces = []
+    for i, j in pairs:
+        if i in used or j in used:
+            continue
+        si, sj = segs[i], segs[j]
+        t_axis = si["n"].cross(sj["n"])
+        if t_axis.Length < 1e-6:
+            continue                                        # same plane: the boxes line up anyway
+        t_axis.normalize()
+        rows = [si["n"], sj["n"], t_axis]                   # a point q on the crease, at the height of box i
+        rhs = [si["n"].dot(si["o"]), sj["n"].dot(sj["o"]), t_axis.dot(si["mid"])]
+        det = rows[0].dot(rows[1].cross(rows[2]))
+        q = (rows[1].cross(rows[2]) * rhs[0] + rows[2].cross(rows[0]) * rhs[1]
+             + rows[0].cross(rows[1]) * rhs[2]) * (1 / det)
+        ui, uj = t_axis.cross(si["n"]), t_axis.cross(sj["n"])
+        if (si["mid"] - q).dot(ui) < 0:
+            ui = ui * -1
+        if (sj["mid"] - q).dot(uj) < 0:
+            uj = uj * -1
+        m = ui - uj
+        m.normalize()                                       # normal of the bisecting plane, towards side i
+        if abs(si["d"].dot(m)) < 1e-3 or abs(sj["d"].dot(m)) < 1e-3:
+            continue
+        corners = []
+        for ev, zv in ((si["w"][0], -SQUARE_EMBED), (si["w"][1], -SQUARE_EMBED),
+                       (si["w"][1], si["h"]), (si["w"][0], si["h"])):
+            base_pt = si["c"] + si["e"] * ev + si["n"] * zv
+            corners.append(base_pt + si["d"] * ((q - base_pt).dot(m) / si["d"].dot(m)))
+        section = Part.Face(Part.makePolygon(corners + [corners[0]]))
+        mid_pt = sum(corners, Vector(0, 0, 0)) * (1 / 4)
+        for sg, side in ((si, 1), (sj, -1)):                # side: the piece lies on this side of the plane
+            reach = [(sg["c"] + sg["d"] * a - mid_pt).dot(sg["d"]) for a in sg["a"]]
+            far = max(reach, key=lambda r: abs(r))
+            # direction away from the plane: towards the segment's far end
+            pieces.append(section.extrude(sg["d"] * far))
+        used |= {i, j}
+    boxes = [bx for k, bx in enumerate(boxes) if k not in used] + pieces
+    timeout = core.DEFEATURE_TIMEOUT * max(1.0, len(shape.Faces) / 500.0)
+    state, base, res = core._attempt(shape, group, timeout)
+    if state != "ok" or not res["valid"]:
+        return None
+    for box in boxes:
+        base = base.fuse(box)
+    base = base.removeSplitter()
+    return ("result", base) if base.isValid() else None
 
 
 @core.set_rule("boss", category="protrusions")

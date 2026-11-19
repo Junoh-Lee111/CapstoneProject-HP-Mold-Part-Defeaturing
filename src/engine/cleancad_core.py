@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -27,25 +28,27 @@ CATEGORY = {}    # rule name -> what it recognises: holes / edges / protrusions 
 BATCH = {}       # name -> "try" | "only": remove ALL faces the rule selects in one operation
 #                  ("try": fall back to per-feature removal on failure; "only": all-or-nothing)
 
-# Size thresholds are configuration (the mentor: "should not be treated as a universal rule").
-PROFILES = {
-    # example parameters of the HP-supplied script (hard_7); NOT general criteria
-    "hp_example": {"hole_diameter": 6.0, "fillet_radius": 10.0, "logo_max_depth": 0.5,
-                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
-    # recognition-only evaluation: size limits so wide that no real feature is filtered out by size
-    "recognition_only": {"hole_diameter": 50.0, "fillet_radius": 50.0, "logo_max_depth": 0.5,
-                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
-    # HP: when fastener holes must be kept, remove only holes of 2 mm or less (fasteners are ~2.7 mm).
-    # fillet value is the earlier mentor starting value, still to be confirmed.
-    "keep_fasteners": {"hole_diameter": 2.0 + 1e-6, "fillet_radius": 5.0, "logo_max_depth": 0.5,
-                   "boss_max_diameter": 20.0, "rib_max_thickness": 4.0, "chamfer_size": 5.0},
-}
-PROFILE = dict(PROFILES[os.environ.get("CLEANCAD_PROFILE", "hp_example")])
+# Size thresholds are configuration (the mentor: "should not be treated as a universal rule"). They live in
+# the settings package (pure Python, shared with the screen and the ML code); PROFILE is what the rules read.
+_SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../src
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+import settings  # noqa: E402
+
+PROFILES = {name: settings.effective(values) for name, values in settings.BUILTIN_PRESETS.items()}
+PROFILE = dict(PROFILES[os.environ.get("CLEANCAD_PROFILE", settings.DEFAULT_PRESET)])
 
 
 def set_profile(name):
+    """Use a preset (built-in or saved by the user) as the live profile."""
     PROFILE.clear()
-    PROFILE.update(PROFILES[name])
+    PROFILE.update(PROFILES[name] if name in PROFILES else settings.effective(settings.load_preset(name)))
+
+
+def apply_settings(values):
+    """Use a settings dict (see the settings package) as the live profile: what the screen's panel calls."""
+    PROFILE.clear()
+    PROFILE.update(settings.effective(values))
 
 
 def rule(name, category="scaffolding"):
@@ -54,6 +57,18 @@ def rule(name, category="scaffolding"):
         CATEGORY[name] = category
         return fn
     return deco
+
+
+# The order in which all rules are applied: stand-up features first (ribs and bosses carry root fillets that
+# must not be removed on their own), then holes, then recesses (a recess is not a round: removing the rounds first
+# would spoil it), then rounded / bevelled edges, then markings.
+RULE_ORDER = ("protrusions", "holes", "pockets", "bumps", "edges", "markings")
+
+
+def all_rules():
+    """Every real rule (not the test scaffolding) in the order they should be applied."""
+    cats = rules_by_category()
+    return [r for cat in RULE_ORDER for r in cats.get(cat, [])]
 
 
 def rules_by_category():
@@ -181,8 +196,11 @@ def groups(shape, faces):
 # not survive fork). Headless runs therefore send each removal to a separate worker process
 # (src/engine/defeature_worker.py, one long-lived FreeCAD instance) and kill it after DEFEATURE_TIMEOUT
 # seconds. A timeout (or a crash of the worker) is reported as an ordinary failure, so process()
-# skips that feature and carries on. In the GUI the call runs in-process without a limit.
+# skips that feature and carries on (the limit is scaled up for models of more than 500 faces).
+# In the GUI the call runs in-process without a limit.
 DEFEATURE_TIMEOUT = float(os.environ.get("CLEANCAD_DEFEATURE_TIMEOUT", "60"))   # seconds; 0 = off
+GUARD_IN_GUI = False     # True: the GUI too sends each removal to the worker process (the Studio does, so a stuck
+#                          kernel call cannot freeze the window; it costs a little time per removal)
 
 
 class WorkerUnavailable(Exception):
@@ -206,9 +224,9 @@ class _Worker:
         env = dict(os.environ, CLEANCAD_WORKER_DIR=self.dir, CLEANCAD_PARENT_PID=str(os.getpid()))
         self.proc = subprocess.Popen([exe, script], env=env, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
-        deadline = time.time() + 120
+        deadline = time.monotonic() + 120
         while not os.path.exists(os.path.join(self.dir, "ready")):
-            if self.proc.poll() is not None or time.time() > deadline:
+            if self.proc.poll() is not None or time.monotonic() > deadline:
                 self.kill()
                 raise WorkerUnavailable("worker did not start")
             time.sleep(0.05)
@@ -245,12 +263,12 @@ class _Worker:
             put(f"req{n}.tool.brep", tool.exportBrepToString())
         put(f"req{n}.json", json.dumps({"faces": idx, "delay": delay, "op": "cut" if tool is not None else "defeature"}))
         res_path = os.path.join(self.dir, f"res{n}.json")
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + timeout
         while not os.path.exists(res_path):
             if self.proc.poll() is not None:
                 self.kill()
                 return "crash", "the CAD kernel process died"
-            if time.time() > deadline:
+            if time.monotonic() > deadline:
                 self.kill()
                 return "timeout", f"no answer after {timeout:g} s"
             time.sleep(0.01)
@@ -269,6 +287,15 @@ def removal_fallback(fn):
     return fn
 
 
+PRE_REMOVALS = []   # fn(shape, group) -> ("result", new_shape) or None: tried BEFORE defeaturing() (a feature that
+                    # defeaturing() would remove in the wrong way, e.g. a pin tip that has to be filled, not opened)
+
+
+def pre_removal(fn):
+    PRE_REMOVALS.append(fn)
+    return fn
+
+
 _WORKER = _Worker()
 atexit.register(_WORKER.kill)
 
@@ -280,9 +307,50 @@ def _judge(group, new_shape):
             "gone": [not any(f.isSame(a) for a in after) for f in group]}
 
 
+# ---- time budget ------------------------------------------------------------------------------------------------
+# A run (process() or the screen's live removal) may have a time budget (settings: "time_budget", seconds, 0 = none).
+# Every removal attempt looks at it: no attempt starts after the budget is used up, and an attempt never gets more
+# time than is left. What is not done by then is reported as skipped, not as a silent hang.
+_BUDGET = {"end": None}
+
+
+class time_budget:
+    """with time_budget(seconds): ... - the budget of everything inside (nested budgets: the earlier end wins)."""
+
+    def __init__(self, seconds):
+        self.seconds = seconds
+
+    def __enter__(self):
+        self.previous = _BUDGET["end"]
+        if self.seconds and self.seconds > 0:
+            end = time.monotonic() + self.seconds
+            _BUDGET["end"] = end if self.previous is None else min(self.previous, end)
+        return self
+
+    def __exit__(self, *exc):
+        _BUDGET["end"] = self.previous
+
+
+def budget_left():
+    """Seconds left in the budget in force, None if there is none."""
+    end = _BUDGET["end"]
+    return None if end is None else end - time.monotonic()
+
+
+def out_of_time():
+    left = budget_left()
+    return left is not None and left <= 0
+
+
 def _attempt(shape, group, timeout, delay=0, tool=None):
-    """One removal attempt (defeaturing, or cutting `tool` away). -> (state, new_shape, result dict | message)"""
-    if timeout > 0 and not FreeCAD.GuiUp:
+    """One removal attempt (defeaturing, or cutting `tool` away). -> (state, new_shape, result dict | message)
+    state "budget": the time budget is used up, nothing was tried."""
+    left = budget_left()
+    if left is not None:
+        if left <= 0:
+            return "budget", None, "time budget used up"
+        timeout = min(timeout, max(0.5, left)) if timeout > 0 else left
+    if timeout > 0 and (not FreeCAD.GuiUp or GUARD_IN_GUI):
         try:
             state, res = _WORKER.run(shape, group, timeout, delay, tool)
         except WorkerUnavailable:
@@ -293,8 +361,162 @@ def _attempt(shape, group, timeout, delay=0, tool=None):
             new_shape = Part.Shape()
             new_shape.importBrepFromString(res["brep"])
             return "ok", new_shape, res
-    new_shape = shape.defeaturing(group) if tool is None else shape.cut(tool).removeSplitter()
+    try:
+        new_shape = shape.defeaturing(group) if tool is None else shape.cut(tool).removeSplitter()
+    except Exception as e:                  # noqa: BLE001  (like the worker: an error is a failed attempt, so the
+        return "error", None, repr(e)       # fallbacks still get their turn)
     return "ok", new_shape, _judge(group, new_shape)
+
+
+SPLIT_ENABLED = os.environ.get("CLEANCAD_NO_SPLIT") != "1"   # CLEANCAD_NO_SPLIT=1: no face-by-face help (failure demo)
+SPLIT_MAX_SECONDS = 150.0        # one face-by-face attempt may take this long in all
+SPLIT_FACE_TIMEOUT = 10.0         # and this long for a single face
+MAX_VOLUME_CHANGE = 0.20          # one removal that changes the volume by more than this is a broken result
+SPLIT_MAX_VOLUME_CHANGE = 0.01   # a single face removal may change the volume by at most this fraction
+
+
+# Face by face is the remedy for a kernel that hangs, crashes or does nothing on a group - NOT for a group the
+# kernel removed "successfully" into an invalid / implausible shape: such a group is not a round that can be taken
+# away (a pocket, a bump, a free-form region), and trying its faces one by one only costs minutes.
+FAIL_FAST = os.environ.get("CLEANCAD_FAIL_FAST", "1") == "1"
+# Skipping the whole-group attempt and going face by face right away is for very big models (1000+ faces) where the
+# whole group hangs or breaks the shape; a smaller model gets the whole-group attempt first (seconds, a clear verdict).
+EARLY_SPLIT_MIN_FACES = int(os.environ.get("CLEANCAD_EARLY_SPLIT_FACES", "400"))
+LOCAL_MIN_FACES = 60              # from this many faces on, a face is removed in a small piece of the shape
+LOCAL_MARGIN = 3.0                # mm of the shape kept around the face in that piece
+
+
+def _attempt_local(shape, face, timeout):
+    """Remove ONE face in a small piece of the shape: cut a box around it out of the shape, defeature the
+    piece (fast, it has few faces) and fuse it back. defeaturing() on a 100-face free-form model takes 10-30 s
+    per face because it works on the whole shape; on the piece it takes a fraction of a second.
+    -> like _attempt(); falls back to the whole shape when the piece can not be made."""
+    b = face.BoundBox
+    m = max(LOCAL_MARGIN, 0.5 * max(b.XLength, b.YLength, b.ZLength))
+    try:
+        box = Part.makeBox(b.XLength + 2 * m, b.YLength + 2 * m, b.ZLength + 2 * m,
+                           FreeCAD.Vector(b.XMin - m, b.YMin - m, b.ZMin - m))
+        local = shape.common(box)
+        target = next((f for f in local.Faces if sig(f) == sig(face)), None)
+        if len(local.Solids) != 1 or target is None or not local.isValid():
+            raise ValueError("no usable piece")
+        state, new_local, res = _attempt(local, [target], timeout)
+        if state != "ok":
+            return state, None, res
+        if not res["valid"] or len(new_local.Faces) >= len(local.Faces):
+            return "ok", shape, {"faces": len(shape.Faces), "volume": shape.Volume, "valid": True, "gone": [False]}
+        new = shape.cut(box).fuse(new_local).removeSplitter()
+        left = {sig(f) for f in new.Faces}
+        return "ok", new, {"faces": len(new.Faces), "volume": new.Volume, "valid": new.isValid(),
+                           "gone": [sig(face) not in left]}
+    except Exception:                                       # noqa: BLE001
+        return _attempt(shape, [face], timeout)
+
+
+SPLIT_FACE_TIMEOUT_FAST = 3.0     # first pass: a face that takes longer than this is left for the second pass
+SPLIT_MAX_STUCK = 4               # this many stuck faces in a row (timeouts): the rest of the group is given up
+
+
+STAGED_ENABLED = os.environ.get("CLEANCAD_STAGED", "1") == "1"
+STAGED_MIN_FACES = 6              # a network of rounds this big is removed in two stages
+
+
+def _staged(shape, group, timeout):
+    """A network of rounds the kernel can not remove in one go: take the corner patches (spheres, tori, free-form
+    patches where rounds meet) away FIRST, then the edge rounds (cylinders) - the reverse of the order in which a CAD
+    system makes them (rounds first, corner blends last). Measured: HP sample Remove_Flesh, 61 faces: whole group
+    +22 % volume / invalid, cylinders first: stuck, corners first then cylinders: 110 -> 80 faces, volume unchanged.
+    -> (new_shape, result dict) or None if the first stage does not give a valid, plausible shape."""
+    kinds = lambda f: type(f.Surface).__name__                                  # noqa: E731
+    rounds = [f for f in group if kinds(f) == "Cylinder"]
+    corners = [f for f in group if kinds(f) not in ("Cylinder", "Plane")]
+    if len(group) < STAGED_MIN_FACES or not rounds or not corners:
+        return None
+    current, done = shape, False
+    for stage in (corners, rounds):
+        wanted = {sig(f) for f in stage}
+        faces = [f for f in current.Faces if sig(f) in wanted]
+        if not faces:
+            continue
+        state, new, res = _attempt(current, faces, timeout)
+        if state != "ok" or not res["valid"] or len(new.Faces) >= len(current.Faces):
+            break
+        change = abs(res["volume"] - current.Volume) / max(abs(current.Volume), 1e-9)
+        if current.Solids and change > MAX_VOLUME_CHANGE:
+            break
+        current, done = new, True
+    if not done:
+        return None
+    res = _judge(group, current)
+    return (current, res) if res["valid"] else None
+
+
+def _face_by_face(shape, group, timeout):
+    """Last resort when a whole group can not be removed (free-form faces often fail together but not one by
+    one): remove its faces one at a time, largest first, keeping each step that is valid and does not change
+    the volume by more than SPLIT_MAX_VOLUME_CHANGE. -> (shape, result dict) or None if no face could go.
+
+    Two passes keep the time down: the first gives every face only SPLIT_FACE_TIMEOUT_FAST seconds (most faces that can
+    go at all go within that; a stuck kernel call is what costs the time), the second retries the faces that timed out
+    with the full per-face time, if the budget allows. Several stuck faces in a row end the group."""
+    wanted = [sig(f) for f in sorted(group, key=lambda f: -f.Area)]
+    original = [sig(f) for f in group]
+    current, done = shape, 0
+    deadline = time.monotonic() + SPLIT_MAX_SECONDS
+    full = min(timeout, SPLIT_FACE_TIMEOUT)
+    fast = min(full, SPLIT_FACE_TIMEOUT_FAST)
+
+    def one(want, limit):
+        """-> "done" | "stuck" | "skip" | "stop" for this face, `current` updated when done."""
+        nonlocal current, done
+        face = next((f for f in current.Faces if sig(f) == want), None)
+        if face is None:
+            return "skip"
+        try:
+            if len(current.Faces) >= LOCAL_MIN_FACES:
+                state, new, res = _attempt_local(current, face, limit)
+            else:
+                state, new, res = _attempt(current, [face], limit)
+        except Exception:                                   # noqa: BLE001
+            return "skip"
+        if state == "budget":
+            return "stop"
+        if state == "timeout":
+            return "stuck"
+        if state != "ok" or not res["valid"] or len(new.Faces) >= len(current.Faces):
+            return "skip"
+        if abs(res["volume"] - current.Volume) > SPLIT_MAX_VOLUME_CHANGE * max(shape.Volume, 1e-9):
+            return "skip"
+        current, done = new, done + 1
+        return "done"
+
+    retry, stuck_in_a_row, stopped = [], 0, False
+    for want in wanted:
+        if time.monotonic() > deadline or out_of_time():
+            break
+        result = one(want, fast)
+        if result == "stop":
+            stopped = True
+            break
+        if result == "stuck":
+            retry.append(want)
+            stuck_in_a_row += 1
+            if stuck_in_a_row >= SPLIT_MAX_STUCK:
+                stopped = True
+                break
+        elif result == "done":
+            stuck_in_a_row = 0
+    if not stopped and full > fast:
+        for want in retry:
+            if time.monotonic() > deadline or out_of_time():
+                break
+            if one(want, full) == "stop":
+                break
+    if not done:
+        return None
+    left = {sig(f) for f in current.Faces}
+    return current, {"faces": len(current.Faces), "volume": current.Volume, "valid": current.isValid(),
+                     "gone": [s not in left for s in original]}
 
 
 def remove_group_ex(shape, group, timeout=None, _test_delay=0):
@@ -308,23 +530,49 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
 
     Returns (ok, shape, why, gone) where gone[i] says whether group[i] no longer exists in the result.
     """
-    timeout = DEFEATURE_TIMEOUT if timeout is None else timeout
+    if timeout is None:
+        # a big model legitimately needs longer (a 1000-face logo takes ~35 s): the limit grows with the face
+        # count above 500 faces, so only a genuinely stuck kernel call is cut off
+        timeout = DEFEATURE_TIMEOUT * max(1.0, len(shape.Faces) / 500.0)
     nothing = [False] * len(group)
 
     def changed(res):
         return res["faces"] < len(shape.Faces) or abs(res["volume"] - shape.Volume) > 1e-6
 
     try:
+        for hook in PRE_REMOVALS:
+            proposal = hook(shape, group)
+            if proposal is not None and proposal[0] == "result":
+                res = _judge(group, proposal[1])
+                if changed(res):
+                    if not res["valid"]:
+                        return False, shape, "result invalid", res["gone"]
+                    change = abs(res["volume"] - shape.Volume) / max(abs(shape.Volume), 1e-9)
+                    if shape.Solids and change > MAX_VOLUME_CHANGE:
+                        return False, shape, f"volume changed by {100 * change:.0f} % (implausible)", res["gone"]
+                    return True, proposal[1], "ok (rebuilt)", res["gone"]
+        if (len(group) > 1 and SPLIT_ENABLED and len(shape.Faces) >= EARLY_SPLIT_MIN_FACES and not _test_delay
+                and not any(type(f.Surface).__name__ == "Plane" for f in group)):
+            # a big free-form model and a group of rounds only (no flat faces: logos and ribs are different):
+            # removing the whole group at once is slow and can break the shape, so go face by face in small
+            # pieces right away
+            split = _face_by_face(shape, group, timeout)
+            if split and split[1]["valid"]:
+                return True, split[0], "ok (face by face)", split[1]["gone"]
         state, new_shape, res = _attempt(shape, group, timeout, _test_delay)
         failure = None                                  # why the first attempt did not work
         if state == "timeout":
             failure = f"timeout ({res})"
+        elif state == "budget":
+            failure = "time budget used up"
         elif state == "crash":
             failure = f"crash ({res})"
         elif state == "error":
             failure = f"exception: {res}"
         elif not changed(res):
             failure = "no-op (shape unchanged)"
+        elif shape.Solids and abs(res["volume"] - shape.Volume) > MAX_VOLUME_CHANGE * max(abs(shape.Volume), 1e-9):
+            failure = "volume changed implausibly"          # defeaturing() broke the shape
         how = ""
         if failure:
             for fallback in FALLBACKS:
@@ -340,6 +588,17 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
                 if state2 == "ok" and changed(res2):
                     new_shape, res, failure, how = new2, res2, None, how2
                     break
+            if failure and STAGED_ENABLED:
+                staged = _staged(shape, group, timeout)
+                if staged:
+                    new_shape, res = staged
+                    failure, how = None, " (corners first)"
+            definite = failure in ("volume changed implausibly",)       # the kernel gave a verdict: not a round
+            if failure and len(group) > 1 and SPLIT_ENABLED and not (FAIL_FAST and definite):
+                split = _face_by_face(shape, group, timeout)
+                if split:
+                    new_shape, res = split
+                    failure, how = None, " (face by face)"
             if failure:
                 gone = res["gone"] if state == "ok" else nothing
                 return False, shape, failure, gone
@@ -347,6 +606,20 @@ def remove_group_ex(shape, group, timeout=None, _test_delay=0):
         return False, shape, f"exception: {e!r}", nothing
     if not res["valid"]:
         return False, shape, "result invalid", res["gone"]
+    change = abs(res["volume"] - shape.Volume) / max(abs(shape.Volume), 1e-9)
+    if shape.Solids and change > MAX_VOLUME_CHANGE:         # (the "volume" of an open shell means nothing)
+        return False, shape, f"volume changed by {100 * change:.0f} % (implausible)", res["gone"]
+    if len(group) > 1 and not how and SPLIT_ENABLED:
+        # defeaturing() may take only part of a group away, and the order matters for free-form faces: try
+        # the faces one by one from the original as well and keep whichever leaves fewer of them behind
+        sigs = {sig(f) for f in group}
+        left_whole = sum(1 for f in new_shape.Faces if sig(f) in sigs)
+        if left_whole:
+            more = _face_by_face(shape, group, timeout)
+            if more and more[1]["valid"]:
+                left_split = sum(1 for g in more[1]["gone"] if not g)
+                if left_split < left_whole:
+                    new_shape, res, how = more[0], more[1], " (face by face)"
     return True, new_shape, "ok" + how, res["gone"]
 
 
@@ -363,56 +636,131 @@ def _stages(rule_names):
     return ([face] if face else []) + [[r] for r in rule_names if r in SET_RULES]
 
 
+# A removal that times out wastes the whole time limit. After this many timeouts of one rule the rest of that
+# rule's features are skipped (and recorded as failures) instead of trying each of them in turn.
+MAX_TIMEOUTS_PER_RULE = int(os.environ.get("CLEANCAD_MAX_TIMEOUTS", "2"))
+# Failed removals that return quickly are cheap, but on a big model each one can still take many seconds.
+# After this many seconds spent on failed removals of one rule, the rest of that rule is skipped as well.
+MAX_WASTED_SECONDS = float(os.environ.get("CLEANCAD_MAX_WASTED_SECONDS", "180"))
+# Hard limit for one rule on one model, successes included (on a big model every removal also costs the
+# selecting and grouping of what is left).
+MAX_SECONDS_PER_RULE = float(os.environ.get("CLEANCAD_MAX_SECONDS_PER_RULE", "300"))
+
+
 def process(shape, rule_names):
-    """Headless end-to-end: repeatedly remove feature groups until none remain.
+    """Headless end-to-end: repeatedly remove feature groups until none remain, within the time budget of the profile
+    ("time_budget" seconds, 0 = none); what is left when it is used up is reported as a failure ("skipped").
 
     Returns (final_shape, removed, failures). Each failure keeps the geometry's
     face signatures so it can be stored for manual correction and fed back into
     Stage 2 retraining (per FR-DEF-04 / NFR-REL-02).
     """
+    with time_budget(PROFILE.get("time_budget", 0)):
+        return _process(shape, rule_names)
+
+
+def _process(shape, rule_names):
     failed_sigs, removed, failures, batch_dead = set(), [], [], set()
     stages = _stages(rule_names)
     current = shape
+    timeouts, wasted, started = {}, {}, {}
+
+    def note_failure(name, why, seconds=0.0):
+        if str(why).startswith("timeout"):
+            timeouts[name] = timeouts.get(name, 0) + 1
+        wasted[name] = wasted.get(name, 0.0) + seconds
+
+    def skip_rest(stage):
+        """Once a rule has timed out too often, give up on its remaining features."""
+        name = stage[0]
+        too_many_timeouts = timeouts.get(name, 0) >= MAX_TIMEOUTS_PER_RULE
+        too_slow = wasted.get(name, 0.0) >= MAX_WASTED_SECONDS
+        over_budget = time.monotonic() - started.get(name, time.monotonic()) >= MAX_SECONDS_PER_RULE
+        if not (too_many_timeouts or too_slow or over_budget):
+            return
+        rest = select(current, stage, failed_sigs)
+        if rest:
+            info = info_for(rest)
+            info["reason"] = (f"skipped: {timeouts.get(name, 0)} removals of '{name}' timed out already" if too_many_timeouts
+                              else f"skipped: failed removals of '{name}' already took {wasted[name]:.0f} s" if too_slow
+                              else f"skipped: '{name}' used up its time budget of {MAX_SECONDS_PER_RULE:.0f} s")
+            failures.append(info)
+            failed_sigs.update(info["sigs"])
 
     def info_for(group):
         return {"faces": len(group),
                 "types": sorted({type(f.Surface).__name__ for f in group}),
                 "sigs": [sig(f) for f in group]}
 
+    cache = {}      # stage name -> (shape, groups still to try): while the shape does not change (after a
+    #                 failed removal) the next group is taken from here instead of selecting and grouping again
+
     while True:
-        progressed = False
-        for stage in stages:
-            selected = select(current, stage, failed_sigs)
-            if not selected:
-                continue
-            name = stage[0]
-            if name in BATCH and name not in batch_dead:
-                ok, new_shape, why, gone = remove_group_ex(current, selected)
-                if ok:
-                    if not any(gone) or (BATCH[name] == "only" and not all(gone)):
-                        ok, why = False, "requested faces not (fully) removed"
-                if ok:
-                    removed.append(info_for(selected))
-                    current, progressed = new_shape, True
-                    break
-                if BATCH[name] == "only":
-                    info = info_for(selected)
-                    info["reason"] = why
+        if out_of_time():
+            for stage in stages:                    # what the budget did not allow: recorded, not lost
+                rest = select(current, stage, failed_sigs)
+                if rest:
+                    info = info_for(rest)
+                    info["reason"] = f"skipped: time budget of {PROFILE.get('time_budget', 0):.0f} s used up"
                     failures.append(info)
                     failed_sigs.update(info["sigs"])
-                    progressed = True
-                    break
-                batch_dead.add(name)   # "try": fall back to per-feature removal below
-            group = groups(current, selected)[0]
+            break
+        progressed = False
+        for stage in stages:
+            name = stage[0]
+            started.setdefault(name, time.monotonic())
+            cached = cache.get(name)
+            if cached is not None and cached[0] is current:
+                todo = [(g, s) for g, s in cached[1] if not (s & failed_sigs)]
+                cache[name] = (current, todo[1:])
+                if not todo:
+                    continue
+                group = todo[0][0]
+            else:
+                selected = select(current, stage, failed_sigs)
+                if not selected:
+                    continue
+                if name in BATCH and name not in batch_dead:
+                    t_batch = time.monotonic()
+                    ok, new_shape, why, gone = remove_group_ex(current, selected)
+                    if ok:
+                        if not any(gone) or (BATCH[name] == "only" and not all(gone)):
+                            ok, why = False, "requested faces not (fully) removed"
+                    if ok:
+                        removed.append(info_for(selected))
+                        current, progressed = new_shape, True
+                        break
+                    note_failure(name, why, time.monotonic() - t_batch)
+                    if BATCH[name] == "only":
+                        info = info_for(selected)
+                        info["reason"] = why
+                        failures.append(info)
+                        failed_sigs.update(info["sigs"])
+                        skip_rest(stage)
+                        progressed = True
+                        break
+                    batch_dead.add(name)   # "try": fall back to per-feature removal below
+                    skip_rest(stage)
+                    if not select(current, stage, failed_sigs):
+                        progressed = True
+                        break
+                # sig() is not cheap (centre of mass), so the signatures of every group are computed once
+                feature_groups = [(g, frozenset(sig(f) for f in g)) for g in groups(current, selected)]
+                group = feature_groups[0][0]
+                cache[name] = (current, feature_groups[1:])
+            t_group = time.monotonic()
             ok, new_shape, why = remove_group(current, group)
             info = info_for(group)
             if ok:
                 removed.append(info)
                 current = new_shape
+                skip_rest(stage)       # only acts when the rule has used up its time budget
             else:
                 info["reason"] = why
                 failures.append(info)
                 failed_sigs.update(info["sigs"])
+                note_failure(name, why, time.monotonic() - t_group)
+                skip_rest(stage)
             progressed = True
             break
         if not progressed:

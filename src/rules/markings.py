@@ -22,7 +22,7 @@ for _p in (_SRC, os.path.join(_SRC, "engine")):                       # layers: 
     if _p not in sys.path:
         sys.path.insert(0, _p)
 import cleancad_core as core  # noqa: E402
-from geom_utils import Topo, stype, plane_frame, box2d, is_circle_wire  # noqa: E402,F401
+from geom_utils import Topo, stype, plane_frame, box2d, is_circle_wire, face_points  # noqa: E402,F401
 
 MIN_HOST_AREA = 20.0        # mm2: smaller flat faces are not logo hosts
 MAX_FACE_FRACTION = 0.20    # a bundle face must be smaller than this part of the host area
@@ -48,6 +48,12 @@ def face_depth(face, origin, n):
                for x in (bb.XMin, bb.XMax) for y in (bb.YMin, bb.YMax) for z in (bb.ZMin, bb.ZMax))
 
 
+def _edge_place(edge):
+    """Where an edge lies, as a hashable key: its two end points (in either order) and its length."""
+    ends = sorted((round(v.Point.x, 3), round(v.Point.y, 3), round(v.Point.z, 3)) for v in edge.Vertexes)
+    return (tuple(ends), round(edge.Length, 2))
+
+
 def logo_bundles(shape):
     """-> list of dicts {"host": index, "faces": [indices]} for every accepted engraving / emboss."""
     t = Topo(shape)
@@ -56,11 +62,17 @@ def logo_bundles(shape):
     for e, owners in t.edges:
         edge_owners.setdefault(e.hashCode(), []).append((e, owners))
 
+    by_place = {}
+    for e, owners in t.edges:
+        by_place.setdefault(_edge_place(e), set()).update(owners)
+
     def owners_of(edge):
         for e, owners in edge_owners.get(edge.hashCode(), []):
             if e.isSame(edge):
                 return owners
-        return set()
+        # a host face that was re-made keeps the shape of its holes but not the identity of their edges: the
+        # faces around a hole are then found by where the edge lies
+        return by_place.get(_edge_place(edge), set())
 
     hosts = [i for i, f in enumerate(t.faces)
              if t.plane(i) is not None and len(f.Wires) > 1 and t.area[i] >= MIN_HOST_AREA]
@@ -112,8 +124,70 @@ def logo_bundles(shape):
                     nxt |= t.nb[f]
                 frontier = nxt - bundle
             if bundle and sum(t.area[f] for f in bundle) <= MAX_BUNDLE_FRACTION * t.area[h]:
-                bundles.append({"host": h, "faces": sorted(bundle)})
+                bundles.append({"host": h, "faces": sorted(bundle), "rim": wire, "n": n, "origin": origin})
     return t, bundles
+
+
+_LOGO_CACHE = {}
+
+
+def _logo_bundles_cached(shape):
+    """logo_bundles() once per shape (the engine selects again and again, and the removal hook asks too)."""
+    last = _LOGO_CACHE.get("shape")
+    if last is not None and last.isSame(shape):
+        return _LOGO_CACHE["result"]
+    result = logo_bundles(shape)
+    _LOGO_CACHE["shape"], _LOGO_CACHE["result"] = shape, result
+    return result
+
+
+def _logo_tool(t, b):
+    """("fill" | "cut", solid) for one logo: its outline on the host face pushed down (an engraving is filled) or up (a
+    raised mark is cut away) by the height of the mark; None if it is neither or the outline is not a closed wire."""
+    origin, n = b["origin"], b["n"]
+    levels = [(p - origin).dot(n) for i in b["faces"] for p in face_points(t.faces[i])]
+    up, down = max(levels), -min(levels)
+    try:
+        outline = Part.Face(b["rim"])
+        if up > 1e-4 and down <= 1e-4:
+            return "cut", outline.extrude(n * up)
+        if down > 1e-4 and up <= 1e-4:
+            return "fill", outline.extrude(n * -down)
+    except Exception:                                       # noqa: BLE001
+        pass
+    return None
+
+
+@core.pre_removal
+def logo_by_prisms(shape, group):
+    """Logos on a SOLID are taken away with two simple solids per mark (the outline pushed into the engraving, or up
+    over the raised mark) instead of the CAD kernel's defeaturing, which needs minutes for a text of 150 faces. Shell
+    models (pressed sheets) have their own fallback below."""
+    if not shape.Solids:
+        return None
+    wanted = {core.sig(f) for f in group}
+    t, bundles = _logo_bundles_cached(shape)
+    mine = [b for b in bundles if {core.sig(t.faces[i]) for i in b["faces"]} <= wanted]
+    if not mine or not wanted <= {core.sig(t.faces[i]) for b in mine for i in b["faces"]}:
+        return None                 # the group is more than logos
+    fills, cuts = [], []
+    for b in mine:
+        tool = _logo_tool(t, b)
+        if tool is None:
+            return None
+        (fills if tool[0] == "fill" else cuts).append(tool[1])
+    try:
+        result = shape
+        if fills:
+            result = result.fuse(fills[0].multiFuse(fills[1:]) if len(fills) > 1 else fills[0])
+        if cuts:
+            result = result.cut(cuts[0].multiFuse(cuts[1:]) if len(cuts) > 1 else cuts[0])
+        result = result.removeSplitter()
+    except Exception:                                       # noqa: BLE001
+        return None
+    if not result.isValid() or len(result.Solids) != len(shape.Solids):
+        return None
+    return "result", result
 
 
 @core.set_rule("logo", batch="try", category="markings")
@@ -132,7 +206,10 @@ def rebuild_surface_model(shape, group):
         return None
     t, bundles = logo_bundles(shape)
     wanted = {core.sig(f) for f in group}
-    mine = [b for b in bundles if {core.sig(t.faces[i]) for i in b["faces"]} <= wanted]
+    # the group may be only part of a bundle (the demo groups the faces still selected; a face left over from an
+    # earlier removal is missing): any bundle that most of the group belongs to is removed completely
+    mine = [b for b in bundles
+            if len(wanted & {core.sig(t.faces[i]) for i in b["faces"]}) * 2 >= len(wanted)]
     if not mine:
         return None
     gone = {i for b in mine for i in b["faces"]}
@@ -143,16 +220,27 @@ def rebuild_surface_model(shape, group):
             continue
         hosts_done.add(h)
         host = t.faces[h]
-        claimed = set()
+        keep = []                       # the holes of the host that stay (wires are listed once: their ids differ per call)
         for w in host.Wires:
             if w.isSame(host.OuterWire):
                 continue
-            if any(o in gone for e in w.Edges for o in _owners(t, e)):
-                claimed.add(id(w))
-        keep = [w for w in host.Wires if not w.isSame(host.OuterWire) and id(w) not in claimed]
-        face = Part.Face(host.OuterWire)
-        for w in keep:
-            face = face.cut(Part.Face(w))
+            if not any(o in gone for e in w.Edges for o in _owners(t, e)):
+                keep.append(w)
+        try:
+            # built from the host's own wires, so the edges of the holes that stay are still shared with the
+            # faces around them: the logos that are left are still recognized after this one is gone
+            face = Part.Face(host.OuterWire)
+            if keep:
+                face.cutHoles(keep)
+            if not face.isValid() or not t.area[h] * 0.999 < face.Area < 1.2 * t.area[h]:
+                raise ValueError("unexpected area")
+            c = face.CenterOfMass
+            if (face.normalAt(*face.Surface.parameter(c)).dot(host.normalAt(*host.Surface.parameter(c)))) < 0:
+                face.reverse()              # same side as the face it replaces, or the depth of the logos flips
+        except Exception:                   # noqa: BLE001
+            face = Part.Face(host.OuterWire)
+            for w in keep:
+                face = face.cut(Part.Face(w))
         new_faces.append(face)
     # the islands inside letters like A or O lie in the host plane and touch the logo: they go with it
     for b in mine:
@@ -164,6 +252,15 @@ def rebuild_surface_model(shape, group):
             o_i, n_i = plane_frame(f, t.plane(i))[:2]
             if n_i.dot(n_h) > 1 - 1e-9 and abs((o_i - o_h).dot(n_h)) < 1e-4 and t.nb[i] & gone:
                 gone.add(i)
+    # faces of the same logo beyond the hop limit (a thin stroke fragment): small faces still hanging on the
+    # faces that go are taken along, never the host or anything large
+    limit = MAX_FACE_FRACTION * max(t.area[b["host"]] for b in mine)
+    frontier = set(gone)
+    while frontier:
+        nxt = {j for i in frontier for j in t.nb[i]
+               if j not in gone and j not in hosts_done and t.area[j] < limit}
+        gone |= nxt
+        frontier = nxt
     skip = gone | hosts_done
     new_faces += [f for i, f in enumerate(t.faces) if i not in skip]
     return "result", Part.Compound(new_faces)
@@ -173,4 +270,9 @@ def _owners(topo, edge):
     for e, owners in topo.edges:
         if e.isSame(edge):
             return owners
-    return set()
+    place = _edge_place(edge)           # an edge of a re-made host face: look it up by where it lies
+    found = set()
+    for e, owners in topo.edges:
+        if _edge_place(e) == place:
+            found |= owners
+    return found

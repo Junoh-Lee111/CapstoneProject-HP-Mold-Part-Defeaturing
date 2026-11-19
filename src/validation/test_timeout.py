@@ -71,6 +71,28 @@ check("process continues after a timeout",
       len(failures) == 1 and "timeout" in failures[0]["reason"] and len(removed) == 1 and time.time() - t < 30,
       f"(removed {len(removed)}, failures {[f['reason'] for f in failures]}, {time.time() - t:.0f}s)")
 
+# 4. repeated timeouts of one rule stop that rule instead of trying every feature
+real_run = core._WORKER.run
+core._WORKER.run = lambda shape, group, timeout, delay=0, tool=None: ("timeout", "no answer after stub")
+core.MAX_TIMEOUTS_PER_RULE = 2
+t = time.time()
+final, removed, failures = core.process(plate_with_holes(20, 50, 80), ["cyl"])
+core._WORKER.run = real_run
+reasons = [f["reason"] for f in failures]
+check("repeated timeouts skip the rest of the rule",
+      len(removed) == 0 and len(failures) == 3 and reasons[-1].startswith("skipped") and time.time() - t < 10,
+      f"({reasons})")
+
+# 5. failed removals that are slow but not timeouts also stop the rule after a time budget
+real_remove = core.remove_group
+core.remove_group = lambda shape, group: (time.sleep(0.6), (False, shape, "no-op (shape unchanged)"))[1]
+core.MAX_WASTED_SECONDS = 1.0
+final, removed, failures = core.process(plate_with_holes(20, 50, 80), ["cyl"])
+core.remove_group = real_remove
+reasons = [f["reason"] for f in failures]
+check("slow failures use up a time budget", len(failures) == 3 and reasons[-1].startswith("skipped: failed removals"),
+      f"({reasons})")
+
 # optional: the real thing
 real = os.environ.get("CLEANCAD_HANG_FILE")
 if real:
