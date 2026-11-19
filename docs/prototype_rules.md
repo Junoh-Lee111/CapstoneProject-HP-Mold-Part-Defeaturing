@@ -42,8 +42,9 @@ The code is organised the same way: one module per group in `src/rules/` (`holes
 | | `rib_simplify` | alternative to `rib` for ribs with rounded / free-form faces: they are not removed but replaced by rectangular ones (one box per straight segment; the two segments of a rib over a bend share one cross-section). Use it **instead of** `rib` - `rib` would remove the rectangular rib again. The mentor's answer for the HP sample PH_rib_to_remove is *Rib: Remove*, so the demo launcher uses `rib` (ribs removed); `rib_simplify` stays available for the case that a rib must be kept in a simpler shape | ours |
 | | `boss` | round columns standing on a flat host, up to the max. diameter. Kept: a boss with a hole through it, a boss with a round bore on its own axis, and a pin with a free-form body | ours |
 | | `pin_tip` | the tapered tip of a shaped pin (everything above its straight cylinder wall); it is replaced by a plain cylinder of the pin's radius up to the old tip height, so a bore that ends inside the tip is not opened | ours |
-| **Markings** | `logo` | engravings and embosses: faces bundled from the non-circular inner wires of a flat host, shallow only | HP's logo rule description, plus our depth cap |
-| | `deboss` | a shallow CLOSED pocket in a flat face (mentor: Emboss / Deboss: Remove), e.g. a round recess with a pad inside that rises back to the plate surface; the whole pocket is filled. Kept: a pocket with a hole through its floor (screw seat), anything that stands above the host plane, a pocket deeper than 0.35 x its opening, solid-less surface models | ours, from the mentor's 10/20 answers |
+| **Markings** | `logo` | engravings and embosses: faces bundled from the non-circular inner wires of a flat host, shallow only | HP's logo rule description, plus our depth cap. On solids the marks are removed with prisms (the outline pushed into an engraving, or up over a raised mark) instead of defeaturing: a 150-face text takes seconds, not minutes |
+| **Recesses** | `flatten` | a shallow recess in a flat face (rim = an inner wire of the face, at most 3 steps of walls, floor, pads, dimples; at most half the part's thickness deep) is filled flat; holes in its floor stay; a blind round hole is not a recess (the hole rule decides). Removed with two simple solids (the rim pushed down to the floor depth, fused), not the CAD kernel's defeaturing | ours, from the mentor's 10/20 answers (Emboss / Deboss) and the 4 Nov samples (Replace Face) |
+| **Bumps** | `bump` | small raised dots on a flat face: foot at most `bump_max_size` wide (default 3 mm), at most 1.5 mm high, at most 8 faces; cut away with a prism of the foot | ours, from the 4 Nov sample Upper_Gap_Dolgi |
 | *(test scaffolding)* | `cyl`, `prot`, `recess`, `chamfer`, `fail_demo` | the original rules, tied to the shape of the generated test parts | ours (test scaffolding) |
 
 How `logo` works (HP's description): start at the inner wires of a planar face; a wire that is a single circle
@@ -53,11 +54,17 @@ wire size; reject a bundle larger than 25 % of the host; skip a wire that has a 
 opposite plane (a through cut). Our own addition: a depth cap of 0.5 mm, so that a blind pocket is not taken for a
 marking.
 
-How `deboss` works (ours): start at an inner wire of a flat host face and follow the faces behind it without ever
-crossing the host. Accepted only when that group touches the host through this one wire (a through hole or slot
-reaches the other side), nothing of it stands above the host plane, its depth is at most 0.35 x the opening, it has
-at most 40 faces and covers less than 80 % of the host. Check: HP sample Boss_to_remove 14 -> 8 faces (recess
-and pad filled, +44 mm3); generated cases `deboss` and `deboss_with_hole`.
+How `flatten` works (ours): start at an inner wire of a flat host face (the rim); follow the faces behind it for at
+most 3 steps; the floor depth is that of the deepest up-facing face; faces that go deeper (the walls of a hole in the
+floor) or rise above the host plane (a boss in the recess) are left out, pads and dimples inside are taken in. Accepted
+when the depth is at most half the part's thickness, the recess is not a blind round hole (cylinder walls and a flat
+floor, deeper than 0.35 x width) and the loops where it meets what was left out are flat (so the holes can be kept).
+The recess is filled with the rim face pushed down to the floor depth (the holes' cross-sections cut out of it) and fused
+to the part; a result that changes the volume by more than 20 % is refused. Rules run in the order recesses, bumps,
+then rounds: a recess must not be taken for rounds first. Results: HP sample Boss_to_remove 14 -> 8 faces, Hole_Screw
+26 -> 23 (the countersink goes, the hole stays), Replace_Face: the frame around two square windows is filled and the
+windows stay (the frame around the third window is not found yet), Upper_Gap_Dolgi 54 -> 28 with `bump` (the 12 dots and the
+countersink go, the hole stays).
 
 ## 3. Safety guard
 
@@ -71,11 +78,25 @@ or only part of it goes, its faces are removed one at a time, largest first (eac
 volume by at most 1 %; 10 s per face, 150 s per group). Some rules register `pre_removal` hooks that replace
 defeaturing for their own features (`pin_tip`, `rib_simplify`).
 
+**Time budget** (setting `time_budget`, seconds, default 60, 0 = none; screen: Performance > Time budget). One run
+(`process()` or the Studio's live removal) stops after the budget; what is not done is recorded as a failure
+("skipped: time budget ... used up"), never hidden. Inside it, a face that can only be removed one by one gets 3 s in
+a first pass (most faces that can go at all go within that); only the faces that timed out are retried with 10 s, and
+4 stuck faces in a row end the group. Measured on the mentor's 4 Nov samples (previously 5-12 minutes each, mostly
+stuck kernel calls): Remove_Flesh 714 s -> 63 s, Remove_HarnessHook 487 s -> 64 s, Replace_Face 311 s -> 61 s, results
+still valid solids. A budget means partial results on very free-form models: the summary says how much was skipped. A group that the kernel
+returns as an invalid / implausible shape (not a round: a pocket, a bump, a free-form region) is not retried face by face
+(`CLEANCAD_FAIL_FAST`), and face-by-face from the start is only for models of 400+ faces. The measured causes of the minutes: most
+of the time was spent retrying groups that were not rounds, and 85 % of the single-face attempts on a connected chain of rounds
+are no-ops (a chain can only be removed as a whole).
+The Studio always sends removals to the guarded worker, so a stuck kernel call cannot freeze the window.
+
+
 ## 4. How it was tested (and how far to trust it)
 
 - `gen_examples.py` builds 14 simple generated parts (holes, fillets, ribs, chamfer, boss, emboss, engraved and
   embossed text, and negative cases that must stay unchanged) and records, per part, which faces are the ground truth.
-- `run_headless.py`: every part must give the expected face count and volume (28/28 with the original and the
+- `run_headless.py`: every part must give the expected face count and volume (31/31 with the original and the
   generic rules). `evaluate_rules.py`: face-level precision/recall per rule set -> `logs/evaluation.md`.
 - Result on the generated parts: holes, fillets, ribs, chamfers and text logos are found; negative cases are left
   alone. **These parts are simple and made by us - the numbers say nothing about general accuracy.**

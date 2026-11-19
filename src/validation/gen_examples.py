@@ -332,20 +332,46 @@ def gen_pocket():
          "blind rectangular pocket 20x12x1.5 (not a logo) -> unchanged", base=plate)
 
 
-def gen_deboss():
+def gen_flatten():
     # a shallow round recess with a pad inside that rises back to the plate surface (HP sample Boss_to_remove)
     plate = flat_plate().cut(Part.makeCylinder(6, 1, Vector(50, 30, 2)))
     plate = plate.fuse(Part.makeCylinder(2, 1, Vector(50, 30, 2))).removeSplitter()
-    save("deboss", plate, ["deboss"], 6, PLATE_VOL, "shallow recess with a flush pad -> plain plate",
-         base=flat_plate(), kinds=[("deboss", lambda f: True)])
+    save("flatten", plate, ["flatten"], 6, PLATE_VOL, "shallow recess with a flush pad -> plain plate",
+         base=flat_plate(), kinds=[("flatten", lambda f: True)])
 
 
-def gen_deboss_with_hole():
-    plate = flat_plate().cut(Part.makeCylinder(6, 1, Vector(50, 30, 2)))
+def gen_flatten_with_hole():
+    # a rectangular recess with a round hole through its floor (HP sample Replace_Face): the recess is filled, the hole stays
+    plate = flat_plate().cut(Part.makeBox(30, 20, 1, Vector(35, 20, 2)))
     plate = plate.cut(Part.makeCylinder(2.5, 20, Vector(50, 30, -5)))
-    # a hole through the floor reaches the other side: a counterbored screw hole, not a deboss
-    save("deboss_with_hole", plate, ["deboss"], len(plate.Faces), plate.Volume,
-         "recess with a hole through its floor (screw seat) -> unchanged", base=plate)
+    base = flat_plate().cut(Part.makeCylinder(2.5, 20, Vector(50, 30, -5)))
+    save("flatten_with_hole", plate, ["flatten"], 7, PLATE_VOL - math.pi * 6.25 * 3,
+         "recess with a hole through its floor -> plain plate, hole kept", base=base,
+         kinds=[("flatten", lambda f: not cyl(f))])
+
+
+def gen_flatten_blind_hole():
+    plate = flat_plate().cut(Part.makeCylinder(3, 2, Vector(50, 30, 1)))
+    # a blind round hole (2 mm deep in a 3 mm plate, deeper than 0.35 x its width) is the hole rule's business, not a recess
+    save("flatten_blind_hole", plate, ["flatten"], len(plate.Faces), plate.Volume,
+         "blind round hole 6 mm wide, 2 mm deep (not a recess) -> unchanged", base=plate)
+
+
+def gen_bump():
+    # small raised dots (0.5 mm high, 1.5 mm wide) on a plate (HP sample Upper_Gap_Dolgi) -> plain plate
+    plate = flat_plate()
+    for x in (20, 50, 80):
+        plate = plate.fuse(Part.makeCylinder(0.75, 0.5, Vector(x, 30, 3)))
+    plate = plate.removeSplitter()
+    save("bump", plate, ["bump"], 6, PLATE_VOL, "three small dots (1.5 mm wide, 0.5 mm high) -> plain plate",
+         base=flat_plate(), kinds=[("bump", lambda f: True)])
+
+
+def gen_bump_too_big():
+    plate = flat_plate().fuse(Part.makeCylinder(5, 1, Vector(50, 30, 3))).removeSplitter()
+    # a 10 mm wide column is no small bump (the boss rule decides): must stay as it is
+    save("bump_too_big", plate, ["bump"], len(plate.Faces), plate.Volume,
+         "10 mm wide, 1 mm high column (not a small bump) -> unchanged", base=plate)
 
 
 def gen_large_features():
@@ -360,7 +386,7 @@ def gen_large_features():
 def main():
     for gen in (gen_plate_hole_fillets, gen_curved_press, gen_ribbed, gen_chamfer,
                 gen_boss, gen_boss_solid, gen_boss_with_hole, gen_emboss, gen_rib_network, gen_near_edge, gen_fail_demo,
-                gen_logo_engrave, gen_logo_emboss, gen_logo_through_text, gen_pocket, gen_deboss, gen_deboss_with_hole,
+                gen_logo_engrave, gen_logo_emboss, gen_logo_through_text, gen_pocket, gen_flatten, gen_flatten_with_hole, gen_flatten_blind_hole, gen_bump, gen_bump_too_big,
                 gen_large_features):
         gen()
     manifest_path = os.path.join(OUT, "manifest.json")

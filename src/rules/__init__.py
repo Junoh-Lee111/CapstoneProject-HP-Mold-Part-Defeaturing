@@ -5,5 +5,7 @@ cleancad_core (see cleancad_core.rules_by_category()).
   edges         ref_fillets, chamfer_edge
   protrusions   ref_protrusions, rib, boss
   markings      logo
+  pockets       flatten (shallow recesses filled flat; holes in the floor stay)
+  bumps         bump (small raised dots cut away)
 """
-from . import holes, edges, protrusions, markings  # noqa: F401
+from . import holes, edges, protrusions, markings, pockets, bumps  # noqa: F401
