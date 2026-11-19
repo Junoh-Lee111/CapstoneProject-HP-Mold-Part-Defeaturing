@@ -1,4 +1,13 @@
-# Face-level rule evaluation
+## Evaluation Information
+
+- **Author:** Balcha Kidus Elias
+- **Date:** November 12, 2026
+- **Script:** `src/validation/evaluate_rules.py`
+- **Command:** `python -m src.validation.evaluate_rules`
+- **Commit:** 52c6d263cbcfbbb2a63cbcb61a80a33c0a6abc2c
+- **Dataset:** Generated CAD test models only (11 examples).
+- **Scope:** These results are from generated test models, not real HP samples. They should not be interpreted as performance on real industrial parts.
+- # Face-level rule evaluation
 
 Truth = faces of the generated shape that are not part of the clean base shape. Generated cases only (9); logos are out of scope.
 
